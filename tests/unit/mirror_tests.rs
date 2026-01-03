@@ -32,3 +32,197 @@ fn introspect_simple_sqlite_file() {
     assert!(users.columns.iter().any(|c| c.name == "id" && c.primary_key));
     assert!(users.columns.iter().any(|c| c.name == "name" && !c.nullable));
 }
+
+#[test]
+fn sqlite_detects_foreign_key_posts_user_id() {
+    // This test asserts that the mirror detects foreign keys. It is
+    // intentionally written to fail at this stage (TDD) because the
+    // `Table` model does not yet expose `foreign_keys`.
+
+    let tmp = NamedTempFile::new().expect("create tmp file");
+    let path = tmp.path().to_str().unwrap().to_string();
+
+    let conn = Connection::open(&path).expect("open tmp db");
+    conn.execute_batch(
+        "CREATE TABLE users (id INTEGER PRIMARY KEY, name TEXT NOT NULL);
+         CREATE TABLE posts (id INTEGER PRIMARY KEY, user_id INTEGER NOT NULL, title TEXT NOT NULL,
+            FOREIGN KEY (user_id) REFERENCES users(id));",
+    )
+    .expect("create tables");
+
+    drop(conn);
+
+    let schema = oam_mirror::introspect_sqlite_path(&path).expect("introspect");
+    let posts = schema
+        .tables
+        .iter()
+        .find(|t| t.name == "posts")
+        .expect("posts table exists");
+
+    // Expect a foreign_keys field on Table with an entry for user_id -> users.id
+    // This will fail to compile/run until foreign key detection is implemented.
+    let fk = posts
+        .foreign_keys
+        .iter()
+        .find(|f| f.column == "user_id")
+        .expect("expected fk on posts.user_id");
+
+    assert_eq!(fk.referenced_table, "users");
+    assert_eq!(fk.referenced_column, "id");
+}
+
+#[test]
+fn sqlite_detects_nullable_foreign_key() {
+    // Create a temp SQLite file and tables where the FK column is nullable.
+    let tmp = NamedTempFile::new().expect("create tmp file");
+    let path = tmp.path().to_str().unwrap().to_string();
+
+    let conn = Connection::open(&path).expect("open tmp db");
+    conn.execute_batch(
+        "CREATE TABLE users (id INTEGER PRIMARY KEY, name TEXT NOT NULL);
+         CREATE TABLE posts (id INTEGER PRIMARY KEY, user_id INTEGER, title TEXT NOT NULL,
+            FOREIGN KEY (user_id) REFERENCES users(id));",
+    )
+    .expect("create tables");
+
+    drop(conn);
+
+    let schema = oam_mirror::introspect_sqlite_path(&path).expect("introspect");
+    let posts = schema
+        .tables
+        .iter()
+        .find(|t| t.name == "posts")
+        .expect("posts table exists");
+
+    let user_col = posts
+        .columns
+        .iter()
+        .find(|c| c.name == "user_id")
+        .expect("user_id column exists");
+
+    // Expect the column to be nullable
+    assert!(user_col.nullable, "expected posts.user_id to be nullable");
+
+    // Expect the foreign key to be present and point to users.id
+    let fk = posts
+        .foreign_keys
+        .iter()
+        .find(|f| f.column == "user_id")
+        .expect("expected fk on posts.user_id");
+    assert_eq!(fk.referenced_table, "users");
+    assert_eq!(fk.referenced_column, "id");
+}
+
+#[test]
+fn sqlite_detects_composite_foreign_key() {
+    // Create a temp SQLite file and tables with a composite foreign key.
+    // This test is expected to fail until composite-FK support is added to the
+    // mirror introspector.
+    let tmp = NamedTempFile::new().expect("create tmp file");
+    let path = tmp.path().to_str().unwrap().to_string();
+
+    let conn = Connection::open(&path).expect("open tmp db");
+    conn.execute_batch(
+        "CREATE TABLE parents (p1 INTEGER NOT NULL, p2 INTEGER NOT NULL, PRIMARY KEY (p1, p2));
+         CREATE TABLE children (id INTEGER PRIMARY KEY, a INTEGER NOT NULL, b INTEGER NOT NULL,
+            FOREIGN KEY (a, b) REFERENCES parents(p1, p2));",
+    )
+    .expect("create tables");
+
+    drop(conn);
+
+    let schema = oam_mirror::introspect_sqlite_path(&path).expect("introspect");
+    let children = schema
+        .tables
+        .iter()
+        .find(|t| t.name == "children")
+        .expect("children table exists");
+
+    // Expect a composite_foreign_keys field or equivalent representation.
+    // This will fail to compile/run until composite FK support is implemented.
+    let cfk = children
+        .composite_foreign_keys
+        .iter()
+        .find(|f| f.columns == vec!["a".to_string(), "b".to_string()])
+        .expect("expected composite fk on children(a,b)");
+
+    assert_eq!(cfk.referenced_table, "parents");
+    assert_eq!(cfk.referenced_columns, vec!["p1".to_string(), "p2".to_string()]);
+}
+
+#[test]
+fn sqlite_composite_fk_order_and_no_single_fks() {
+    // Edge case: composite FK must preserve column order and not be duplicated
+    // as separate single-column foreign keys.
+    let tmp = NamedTempFile::new().expect("create tmp file");
+    let path = tmp.path().to_str().unwrap().to_string();
+
+    let conn = Connection::open(&path).expect("open tmp db");
+    conn.execute_batch(
+        "CREATE TABLE parents (p1 INTEGER NOT NULL, p2 INTEGER NOT NULL, PRIMARY KEY (p1, p2));
+         CREATE TABLE children (id INTEGER PRIMARY KEY, a INTEGER NOT NULL, b INTEGER NOT NULL,
+            FOREIGN KEY (a, b) REFERENCES parents(p1, p2) ON DELETE CASCADE);",
+    )
+    .expect("create tables");
+
+    drop(conn);
+
+    let schema = oam_mirror::introspect_sqlite_path(&path).expect("introspect");
+    let children = schema
+        .tables
+        .iter()
+        .find(|t| t.name == "children")
+        .expect("children table exists");
+
+    // Expect exactly one composite foreign key matching (a,b) -> (p1,p2)
+    let cfk = children
+        .composite_foreign_keys
+        .iter()
+        .find(|f| f.columns == vec!["a".to_string(), "b".to_string()])
+        .expect("expected composite fk on children(a,b)");
+
+    assert_eq!(cfk.referenced_table, "parents");
+    assert_eq!(cfk.referenced_columns, vec!["p1".to_string(), "p2".to_string()]);
+
+    // Ensure there are no single-column foreign_keys for 'a' or 'b'
+    assert!(!children.foreign_keys.iter().any(|f| f.column == "a"));
+    assert!(!children.foreign_keys.iter().any(|f| f.column == "b"));
+}
+
+#[test]
+fn sqlite_detects_enum_via_check_constraint() {
+    // Create a temp SQLite file and a table that uses a CHECK-based enum.
+    let tmp = NamedTempFile::new().expect("create tmp file");
+    let path = tmp.path().to_str().unwrap().to_string();
+
+    let conn = Connection::open(&path).expect("open tmp db");
+    conn.execute_batch(
+        "CREATE TABLE users (
+            id INTEGER PRIMARY KEY,
+            role TEXT NOT NULL CHECK(role IN ('admin','editor','viewer'))
+        );",
+    )
+    .expect("create table");
+
+    drop(conn);
+
+    let schema = oam_mirror::introspect_sqlite_path(&path).expect("introspect");
+    let users = schema
+        .tables
+        .iter()
+        .find(|t| t.name == "users")
+        .expect("users table exists");
+
+    let role_col = users
+        .columns
+        .iter()
+        .find(|c| c.name == "role")
+        .expect("role column exists");
+
+    // Expect the introspector to expose enum values for this column. This will
+    // fail to compile/run until `Column.enum_values` and parsing are implemented.
+    assert_eq!(
+        role_col.enum_values.as_ref().map(|v| v.as_slice()),
+        Some(&["admin".to_string(), "editor".to_string(), "viewer".to_string()][..])
+    );
+}
