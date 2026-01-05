@@ -34,6 +34,18 @@ fn introspect_simple_sqlite_file() {
 }
 
 #[test]
+fn introspect_simple_sqlite_file_err_case() {
+    // Error case: pass a file that is not a valid SQLite database
+    let tmp = NamedTempFile::new().expect("create tmp file");
+    let path = tmp.path().to_str().unwrap().to_string();
+    // Write arbitrary non-SQLite content
+    std::fs::write(&path, b"This is not a SQLite database").expect("write file");
+    
+    let res = oam_mirror::introspect_sqlite_path(&path);
+    assert!(res.is_err(), "expected error for invalid SQLite file, got: {:?}", res);
+}
+
+#[test]
 fn sqlite_detects_foreign_key_posts_user_id() {
     // This test asserts that the mirror detects foreign keys. It is
     // intentionally written to fail at this stage (TDD) because the
@@ -69,6 +81,14 @@ fn sqlite_detects_foreign_key_posts_user_id() {
 
     assert_eq!(fk.referenced_table, "users");
     assert_eq!(fk.referenced_column, "id");
+}
+
+#[test]
+fn sqlite_detects_foreign_key_posts_user_id_err_case() {
+    // Error case: pass a file path that doesn't exist (nonexistent parent directory)
+    let path = "/nonexistent/parent/dir/db.sqlite".to_string();
+    let res = oam_mirror::introspect_sqlite_path(&path);
+    assert!(res.is_err(), "expected error for nonexistent path, got: {:?}", res);
 }
 
 #[test]
@@ -114,6 +134,15 @@ fn sqlite_detects_nullable_foreign_key() {
 }
 
 #[test]
+fn sqlite_detects_nullable_foreign_key_err_case() {
+    // Error case: pass an invalid file path (directory instead of file)
+    let dir = tempfile::tempdir().expect("create temp dir");
+    let path = dir.path().to_str().unwrap().to_string();
+    let res = oam_mirror::introspect_sqlite_path(&path);
+    assert!(res.is_err(), "expected error for directory path, got: {:?}", res);
+}
+
+#[test]
 fn sqlite_detects_composite_foreign_key() {
     // Create a temp SQLite file and tables with a composite foreign key.
     // This test is expected to fail until composite-FK support is added to the
@@ -148,6 +177,14 @@ fn sqlite_detects_composite_foreign_key() {
 
     assert_eq!(cfk.referenced_table, "parents");
     assert_eq!(cfk.referenced_columns, vec!["p1".to_string(), "p2".to_string()]);
+}
+
+#[test]
+fn sqlite_detects_composite_foreign_key_err_case() {
+    // Error case: pass a non-existent file path (missing parent directory)
+    let path = "/nonexistent/parent/dir/child.sqlite".to_string();
+    let res = oam_mirror::introspect_sqlite_path(&path);
+    assert!(res.is_err(), "expected error for nonexistent path, got: {:?}", res);
 }
 
 #[test]
@@ -190,6 +227,17 @@ fn sqlite_composite_fk_order_and_no_single_fks() {
 }
 
 #[test]
+fn sqlite_composite_fk_order_and_no_single_fks_err_case() {
+    // Error case: pass an invalid SQLite file (non-SQLite content)
+    let tmp = NamedTempFile::new().expect("create tmp file");
+    let path = tmp.path().to_str().unwrap().to_string();
+    std::fs::write(&path, b"invalid SQLite content").expect("write file");
+    
+    let res = oam_mirror::introspect_sqlite_path(&path);
+    assert!(res.is_err(), "expected error for invalid SQLite file, got: {:?}", res);
+}
+
+#[test]
 fn sqlite_detects_enum_via_check_constraint() {
     // Create a temp SQLite file and a table that uses a CHECK-based enum.
     let tmp = NamedTempFile::new().expect("create tmp file");
@@ -225,4 +273,39 @@ fn sqlite_detects_enum_via_check_constraint() {
         role_col.enum_values.as_ref().map(|v| v.as_slice()),
         Some(&["admin".to_string(), "editor".to_string(), "viewer".to_string()][..])
     );
+}
+
+#[test]
+fn sqlite_detects_enum_via_check_constraint_err_case() {
+    // Error case: create a CHECK constraint with an incomplete pattern (no literal values)
+    let tmp = NamedTempFile::new().expect("create tmp file");
+    let path = tmp.path().to_str().unwrap().to_string();
+
+    let conn = Connection::open(&path).expect("open tmp db");
+    conn.execute_batch(
+        "CREATE TABLE users (
+            id INTEGER PRIMARY KEY,
+            role TEXT NOT NULL CHECK(length(role) > 0)
+        );",
+    )
+    .expect("create tables");
+
+    drop(conn);
+
+    let schema = oam_mirror::introspect_sqlite_path(&path).expect("introspect");
+    let users = schema
+        .tables
+        .iter()
+        .find(|t| t.name == "users")
+        .expect("users table exists");
+
+    let role_col = users
+        .columns
+        .iter()
+        .find(|c| c.name == "role")
+        .expect("role column exists");
+
+    // The introspector should not extract enum values from a length-check CHECK (not an IN pattern)
+    let has_invalid_enums = role_col.enum_values.as_ref().map_or(false, |v| !v.is_empty());
+    assert!(!has_invalid_enums, "expected no enum values from length-check CHECK, but found: {:?}", role_col.enum_values);
 }

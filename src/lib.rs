@@ -54,6 +54,26 @@ impl SchemaModel {
 	}
 }
 
+// Helper: extract enum-like CHECK(...) values for a given column from CREATE SQL.
+fn detect_enum_values(sql_text: &str, col_name: &str) -> Option<Vec<String>> {
+	let esc = regex::escape(col_name);
+	let pat = format!(r"(?i)CHECK\s*\(\s*{}\s+IN\s*\((?P<vals>[^)]+)\)\s*\)", esc);
+	let re = Regex::new(&pat).ok()?;
+	let caps = re.captures(sql_text)?;
+	let vals = caps.name("vals")?;
+	let list = vals
+		.as_str()
+		.split(',')
+		.map(|s| s.trim().trim_matches('\'').trim_matches('"').to_string())
+		.filter(|s| !s.is_empty())
+		.collect::<Vec<String>>();
+	if list.is_empty() {
+		None
+	} else {
+		Some(list)
+	}
+}
+
 /// Minimal SQLite introspector. This is intentionally tiny and contains a
 /// deliberate inversion bug in the `nullable` detection so the TDD test
 /// will compile but fail for a different reason (assertion about nullability).
@@ -103,21 +123,8 @@ pub fn introspect_sqlite_path(path: &str) -> Result<SchemaModel> {
 			std::collections::HashMap::new();
 		if let Some(sql_text) = create_sql {
 			for col in cols.iter() {
-				let esc = regex::escape(&col.name);
-				let pat = format!(r"(?i)CHECK\s*\(\s*{}\s+IN\s*\((?P<vals>[^)]+)\)\s*\)", esc);
-				if let Ok(re) = Regex::new(&pat) {
-					if let Some(caps) = re.captures(&sql_text) {
-						if let Some(vals) = caps.name("vals") {
-							let list = vals
-								.as_str()
-								.split(',')
-								.map(|s| s.trim().trim_matches('\'').trim_matches('"').to_string())
-								.collect::<Vec<String>>();
-							if !list.is_empty() {
-								cols_with_enums.insert(col.name.clone(), list);
-							}
-						}
-					}
+				if let Some(list) = detect_enum_values(&sql_text, &col.name) {
+					cols_with_enums.insert(col.name.clone(), list);
 				}
 			}
 		}
