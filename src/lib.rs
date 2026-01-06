@@ -2,9 +2,10 @@ use anyhow::Result;
 use rusqlite::Connection;
 use rusqlite::OptionalExtension;
 use regex::Regex;
-use schemars::schema::RootSchema;
+use schemars::schema::{RootSchema, InstanceType, Metadata, ObjectValidation, Schema, SchemaObject, SingleOrVec};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
+use std::collections::{BTreeMap, BTreeSet};
 
 #[derive(Debug, Serialize, Deserialize, JsonSchema, PartialEq)]
 pub struct Column {
@@ -36,6 +37,10 @@ pub struct ForeignKey {
 	pub referenced_table: String,
 	/// referenced column name
 	pub referenced_column: String,
+	/// ON DELETE action (e.g., "CASCADE", "SET NULL", "RESTRICT")
+	pub on_delete: Option<String>,
+	/// ON UPDATE action (e.g., "CASCADE", "SET NULL", "RESTRICT")
+	pub on_update: Option<String>,
 }
 
 #[derive(Debug, Serialize, Deserialize, JsonSchema, PartialEq)]
@@ -46,11 +51,107 @@ pub struct CompositeForeignKey {
 	pub referenced_table: String,
 	/// referenced columns (in order)
 	pub referenced_columns: Vec<String>,
+	/// ON DELETE action (e.g., "CASCADE", "SET NULL", "RESTRICT")
+	pub on_delete: Option<String>,
+	/// ON UPDATE action (e.g., "CASCADE", "SET NULL", "RESTRICT")
+	pub on_update: Option<String>,
 }
 
 impl SchemaModel {
+	/// Generates an LLM-ready JSON Schema representing the data structure of the database.
+    /// This schema defines an Object where keys are Table Names and values are Objects
+    /// representing a row in that table.
 	pub fn to_json_schema(&self) -> RootSchema {
-		schemars::schema_for!(SchemaModel)
+		let mut root_properties = BTreeMap::new();
+
+        for table in &self.tables {
+            let mut col_properties = BTreeMap::new();
+            let mut required_cols = BTreeSet::new();
+
+            for col in &table.columns {
+                // 1. Map SQL Types to JSON Schema Instance Types
+                let sql_upper = col.sql_type.to_uppercase();
+                let instance_type = if sql_upper.contains("INT") {
+                    InstanceType::Integer
+                } else if sql_upper.contains("REAL")
+                    || sql_upper.contains("FLOAT")
+                    || sql_upper.contains("DOUBLE")
+                    || sql_upper.contains("NUMERIC")
+                {
+                    InstanceType::Number
+                } else if sql_upper.contains("BOOL") {
+                    InstanceType::Boolean
+                } else {
+                    // Default to String for TEXT, VARCHAR, DATE, BLOB, etc.
+                    InstanceType::String
+                };
+
+                let mut schema_obj = SchemaObject {
+                    instance_type: Some(SingleOrVec::Single(Box::new(instance_type))),
+                    ..Default::default()
+                };
+
+                // 2. Inject Enums (Crucial for passing json_schema_reflects_enum_constraints)
+                if let Some(enums) = &col.enum_values {
+                    schema_obj.enum_values = Some(
+                        enums
+                            .iter()
+                            .map(|v| serde_json::Value::String(v.clone()))
+                            .collect(),
+                    );
+                }
+
+                // 3. Add Metadata (Primary Key info, original SQL type)
+                let mut desc = format!("SQL Type: {}", col.sql_type);
+                if col.primary_key {
+                    desc.push_str(" (Primary Key)");
+                }
+                schema_obj.metadata = Some(Box::new(Metadata {
+                    description: Some(desc),
+                    ..Default::default()
+                }));
+
+                // 4. Handle Nullability
+                if !col.nullable {
+                    required_cols.insert(col.name.clone());
+                }
+
+                col_properties.insert(col.name.clone(), Schema::Object(schema_obj));
+            }
+
+            // Create the Schema for the Table (representing a Row)
+            let table_schema = SchemaObject {
+                instance_type: Some(SingleOrVec::Single(Box::new(InstanceType::Object))),
+                object: Some(Box::new(ObjectValidation {
+                    properties: col_properties,
+                    required: required_cols,
+                    ..Default::default()
+                })),
+                metadata: Some(Box::new(Metadata {
+                    description: Some(format!("Table: {}", table.name)),
+                    ..Default::default()
+                })),
+                ..Default::default()
+            };
+
+            root_properties.insert(table.name.clone(), Schema::Object(table_schema));
+        }
+
+        // Wrap everything in a Root Object
+        let root = SchemaObject {
+            instance_type: Some(SingleOrVec::Single(Box::new(InstanceType::Object))),
+            object: Some(Box::new(ObjectValidation {
+                properties: root_properties,
+                ..Default::default()
+            })),
+            ..Default::default()
+        };
+
+        RootSchema {
+            schema: root,
+            definitions: BTreeMap::new(),
+            meta_schema: None,
+        }
 	}
 }
 
@@ -152,16 +253,22 @@ pub fn introspect_sqlite_path(path: &str) -> Result<SchemaModel> {
 				let referenced_table: String = row.get(2)?;
 				let from_col: String = row.get(3)?; // 'from'
 				let to_col: String = row.get(4)?; // 'to'
-				Ok((id, seq, referenced_table, from_col, to_col))
+				let on_update: String = row.get(5)?;
+				let on_delete: String = row.get(6)?;
+				Ok((id, seq, referenced_table, from_col, to_col, on_update, on_delete))
 			})?
 			.collect::<Result<Vec<_>, _>>()?;
 
 		use std::collections::BTreeMap;
 		let mut groups: BTreeMap<i64, Vec<(i64, String, String)>> = BTreeMap::new();
 		let mut id_to_table: std::collections::HashMap<i64, String> = std::collections::HashMap::new();
-		for (id, seq, ref_table, from_col, to_col) in fk_rows {
+		let mut id_to_on_delete: std::collections::HashMap<i64, String> = std::collections::HashMap::new();
+		let mut id_to_on_update: std::collections::HashMap<i64, String> = std::collections::HashMap::new();
+		for (id, seq, ref_table, from_col, to_col, on_update, on_delete) in fk_rows {
 			groups.entry(id).or_default().push((seq, from_col, to_col));
 			id_to_table.entry(id).or_insert(ref_table);
+			id_to_on_delete.entry(id).or_insert(on_delete);
+			id_to_on_update.entry(id).or_insert(on_update);
 		}
 
 		let mut single_fks: Vec<ForeignKey> = Vec::new();
@@ -171,12 +278,20 @@ pub fn introspect_sqlite_path(path: &str) -> Result<SchemaModel> {
 			// sort by seq to preserve column order
 			rows.sort_by_key(|r| r.0);
 			let ref_table = id_to_table.get(&id).cloned().unwrap_or_default();
+			let on_delete_str = id_to_on_delete.get(&id).cloned();
+			let on_update_str = id_to_on_update.get(&id).cloned();
+			// Convert empty string or "NO ACTION" to None (SQLite returns "NO ACTION" as default)
+			let on_delete = on_delete_str.filter(|s| !s.is_empty() && s != "NO ACTION");
+			let on_update = on_update_str.filter(|s| !s.is_empty() && s != "NO ACTION");
+			
 			if rows.len() == 1 {
 				let (_seq, from_col, to_col) = rows.into_iter().next().unwrap();
 				single_fks.push(ForeignKey {
 					column: from_col,
 					referenced_table: ref_table,
 					referenced_column: to_col,
+					on_delete: on_delete.clone(),
+					on_update: on_update.clone(),
 				});
 			} else {
 				let columns: Vec<String> = rows.iter().map(|r| r.1.clone()).collect();
@@ -185,6 +300,8 @@ pub fn introspect_sqlite_path(path: &str) -> Result<SchemaModel> {
 					columns,
 					referenced_table: ref_table,
 					referenced_columns,
+					on_delete: on_delete.clone(),
+					on_update: on_update.clone(),
 				});
 			}
 		}
