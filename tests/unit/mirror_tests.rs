@@ -457,7 +457,13 @@ fn json_schema_preserves_table_structure() {
     let json_schema = schema.to_json_schema();
     let json_str = serde_json::to_string(&json_schema).expect("serialize to json");
     
-    assert!(json_str.len() > 0, "json schema should have content");
+    let _json_obj: serde_json::Value = serde_json::from_str(&json_str).expect("should be valid json");
+    assert!(
+        json_schema.schema.object.as_ref()
+            .and_then(|obj| obj.properties.get("users"))
+            .is_some(),
+        "users table should be present in schema"
+    );
 }
 
 #[test]
