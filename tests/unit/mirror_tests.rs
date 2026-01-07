@@ -21,7 +21,7 @@ fn introspect_simple_sqlite_file() {
 
     drop(conn);
 
-    // Call into the library (not implemented yet). Compilation failure is expected.
+    // Call into the library under test and verify the reflected schema.
     let schema = oam_mirror::introspect_sqlite_path(&path).expect("introspect");
     assert!(schema.tables.iter().any(|t| t.name == "users"));
     let users = schema
