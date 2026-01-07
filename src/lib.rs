@@ -246,7 +246,7 @@ pub fn introspect_sqlite_path(path: &str) -> Result<SchemaModel> {
 		// Extract foreign keys for this table (SQLite PRAGMA foreign_key_list)
 		// PRAGMA foreign_key_list returns one row per column in the FK with an `id`
 		// grouping columns that belong to the same (possibly composite) FK.
-		let mut fk_stmt = conn.prepare(&format!("PRAGMA foreign_key_list('{}')", t))?;
+		let mut fk_stmt = conn.prepare(&format!("PRAGMA foreign_key_list('{}')", escaped_table_name))?;
 		let fk_rows = fk_stmt
 			.query_map([], |row| {
 				// Columns: id, seq, table, from, to, on_update, on_delete, match
