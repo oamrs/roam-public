@@ -22,7 +22,7 @@ fn introspect_simple_sqlite_file() {
     drop(conn);
 
     // Call into the library under test and verify the reflected schema.
-    let schema = oam_mirror::introspect_sqlite_path(&path).expect("introspect");
+    let schema = roam::introspect_sqlite_path(&path).expect("introspect");
     assert!(schema.tables.iter().any(|t| t.name == "users"));
     let users = schema
         .tables
@@ -41,7 +41,7 @@ fn introspect_simple_sqlite_file_err_case() {
     // Write arbitrary non-SQLite content
     std::fs::write(&path, b"This is not a SQLite database").expect("write file");
     
-    let res = oam_mirror::introspect_sqlite_path(&path);
+    let res = roam::introspect_sqlite_path(&path);
     assert!(res.is_err(), "expected error for invalid SQLite file, got: {:?}", res);
 }
 
@@ -60,7 +60,7 @@ fn sqlite_detects_foreign_key_posts_user_id() {
 
     drop(conn);
 
-    let schema = oam_mirror::introspect_sqlite_path(&path).expect("introspect");
+    let schema = roam::introspect_sqlite_path(&path).expect("introspect");
     let posts = schema
         .tables
         .iter()
@@ -80,7 +80,7 @@ fn sqlite_detects_foreign_key_posts_user_id() {
 #[test]
 fn sqlite_detects_foreign_key_posts_user_id_err_case() {
     let path = "/nonexistent/parent/dir/db.sqlite".to_string();
-    let res = oam_mirror::introspect_sqlite_path(&path);
+    let res = roam::introspect_sqlite_path(&path);
     assert!(res.is_err(), "expected error for nonexistent path, got: {:?}", res);
 }
 
@@ -99,7 +99,7 @@ fn sqlite_detects_nullable_foreign_key() {
 
     drop(conn);
 
-    let schema = oam_mirror::introspect_sqlite_path(&path).expect("introspect");
+    let schema = roam::introspect_sqlite_path(&path).expect("introspect");
     let posts = schema
         .tables
         .iter()
@@ -127,7 +127,7 @@ fn sqlite_detects_nullable_foreign_key() {
 fn sqlite_detects_nullable_foreign_key_err_case() {
     let dir = tempfile::tempdir().expect("create temp dir");
     let path = dir.path().to_str().unwrap().to_string();
-    let res = oam_mirror::introspect_sqlite_path(&path);
+    let res = roam::introspect_sqlite_path(&path);
     assert!(res.is_err(), "expected error for directory path, got: {:?}", res);
 }
 
@@ -146,7 +146,7 @@ fn sqlite_detects_composite_foreign_key() {
 
     drop(conn);
 
-    let schema = oam_mirror::introspect_sqlite_path(&path).expect("introspect");
+    let schema = roam::introspect_sqlite_path(&path).expect("introspect");
     let children = schema
         .tables
         .iter()
@@ -166,7 +166,7 @@ fn sqlite_detects_composite_foreign_key() {
 #[test]
 fn sqlite_detects_composite_foreign_key_err_case() {
     let path = "/nonexistent/parent/dir/child.sqlite".to_string();
-    let res = oam_mirror::introspect_sqlite_path(&path);
+    let res = roam::introspect_sqlite_path(&path);
     assert!(res.is_err(), "expected error for nonexistent path, got: {:?}", res);
 }
 
@@ -185,7 +185,7 @@ fn sqlite_composite_fk_order_and_no_single_fks() {
 
     drop(conn);
 
-    let schema = oam_mirror::introspect_sqlite_path(&path).expect("introspect");
+    let schema = roam::introspect_sqlite_path(&path).expect("introspect");
     let children = schema
         .tables
         .iter()
@@ -211,7 +211,7 @@ fn sqlite_composite_fk_order_and_no_single_fks_err_case() {
     let path = tmp.path().to_str().unwrap().to_string();
     std::fs::write(&path, b"invalid SQLite content").expect("write file");
     
-    let res = oam_mirror::introspect_sqlite_path(&path);
+    let res = roam::introspect_sqlite_path(&path);
     assert!(res.is_err(), "expected error for invalid SQLite file, got: {:?}", res);
 }
 
@@ -231,7 +231,7 @@ fn sqlite_detects_enum_via_check_constraint() {
 
     drop(conn);
 
-    let schema = oam_mirror::introspect_sqlite_path(&path).expect("introspect");
+    let schema = roam::introspect_sqlite_path(&path).expect("introspect");
     let users = schema
         .tables
         .iter()
@@ -266,7 +266,7 @@ fn sqlite_detects_enum_via_check_constraint_err_case() {
 
     drop(conn);
 
-    let schema = oam_mirror::introspect_sqlite_path(&path).expect("introspect");
+    let schema = roam::introspect_sqlite_path(&path).expect("introspect");
     let users = schema
         .tables
         .iter()
@@ -280,7 +280,7 @@ fn sqlite_detects_enum_via_check_constraint_err_case() {
         .expect("role column exists");
 
     let has_invalid_enums = role_col.enum_values.as_ref().map_or(false, |v| !v.is_empty());
-    assert!(!has_invalid_enums, "expected no enum values from length-check CHECK, but found: {:?}", role_col.enum_values);
+    assert!(!has_invalid_enums, "expected no enum values, got: {:?}", role_col.enum_values);
 }
 
 #[test]
@@ -298,7 +298,7 @@ fn sqlite_detects_foreign_key_cascade_actions() {
 
     drop(conn);
 
-    let schema = oam_mirror::introspect_sqlite_path(&path).expect("introspect");
+    let schema = roam::introspect_sqlite_path(&path).expect("introspect");
     let posts = schema
         .tables
         .iter()
@@ -330,7 +330,7 @@ fn sqlite_detects_foreign_key_cascade_actions_err_case() {
 
     drop(conn);
 
-    let schema = oam_mirror::introspect_sqlite_path(&path).expect("introspect");
+    let schema = roam::introspect_sqlite_path(&path).expect("introspect");
     let posts = schema
         .tables
         .iter()
@@ -362,7 +362,7 @@ fn sqlite_detects_composite_foreign_key_cascade_actions() {
 
     drop(conn);
 
-    let schema = oam_mirror::introspect_sqlite_path(&path).expect("introspect");
+    let schema = roam::introspect_sqlite_path(&path).expect("introspect");
     let children = schema
         .tables
         .iter()
@@ -394,7 +394,7 @@ fn sqlite_detects_composite_foreign_key_cascade_actions_err_case() {
 
     drop(conn);
 
-    let schema = oam_mirror::introspect_sqlite_path(&path).expect("introspect");
+    let schema = roam::introspect_sqlite_path(&path).expect("introspect");
     let children = schema
         .tables
         .iter()
@@ -429,7 +429,7 @@ fn schema_converts_to_json_schema() {
 
     drop(conn);
 
-    let schema = oam_mirror::introspect_sqlite_path(&path).expect("introspect");
+    let schema = roam::introspect_sqlite_path(&path).expect("introspect");
     
     let json_schema = schema.to_json_schema();
     
@@ -453,7 +453,7 @@ fn json_schema_preserves_table_structure() {
 
     drop(conn);
 
-    let schema = oam_mirror::introspect_sqlite_path(&path).expect("introspect");
+    let schema = roam::introspect_sqlite_path(&path).expect("introspect");
     let json_schema = schema.to_json_schema();
     let json_str = serde_json::to_string(&json_schema).expect("serialize to json");
     
@@ -476,7 +476,7 @@ fn json_schema_reflects_enum_constraints() {
 
     drop(conn);
 
-    let schema = oam_mirror::introspect_sqlite_path(&path).expect("introspect");
+    let schema = roam::introspect_sqlite_path(&path).expect("introspect");
     
     let users_table = schema.tables.iter().find(|t| t.name == "users").expect("users table");
     let role_col = users_table.columns.iter().find(|c| c.name == "role").expect("role column");

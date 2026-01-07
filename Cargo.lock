@@ -164,19 +164,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "f52b00d39961fc5b2736ea853c9cc86238e165017a493d1d5c8eac6bdc4cc273"
 
 [[package]]
-name = "oam-mirror"
-version = "0.1.0"
-dependencies = [
- "anyhow",
- "regex",
- "rusqlite",
- "schemars",
- "serde",
- "serde_json",
- "tempfile",
-]
-
-[[package]]
 name = "once_cell"
 version = "1.21.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -240,6 +227,19 @@ name = "regex-syntax"
 version = "0.8.8"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "7a2d987857b319362043e95f5353c0535c1f58eec5336fdfcf626430af7def58"
+
+[[package]]
+name = "roam"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "regex",
+ "rusqlite",
+ "schemars",
+ "serde",
+ "serde_json",
+ "tempfile",
+]
 
 [[package]]
 name = "rusqlite"
