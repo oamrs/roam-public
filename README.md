@@ -6,11 +6,22 @@ The **roam** crate provides OAM (Object Agent Mapper) core functionality with su
 
 ## roam::mirror
 
-Provides a minimal SQLite introspector used to extract database metadata and emit LLM-safe tool definitions.
+Provides a SQLite introspector used to extract database metadata and emit LLM-safe tool definitions.
 
-This is a prototype used for initial TDD cycles. It intentionally keeps logic small
-—production code should expand to support SeaORM introspection, Postgres types,
-foreign keys, enums, constraints, and JSON Schema/Pydantic generation for LLM tools.
+### Features
+
+- **Table & Column Metadata**: Extracts all tables and columns with types, nullability, and primary key information
+- **Foreign Key Support**: Detects both simple single-column and composite multi-column foreign keys with ON DELETE/UPDATE actions
+- **Enum Detection**: Extracts enum-like constraints from CHECK constraints (e.g., `CHECK(role IN ('admin', 'user'))`)
+- **JSON Schema Generation**: Converts database schema to JSON Schema for LLM consumption
+- **Type Mapping**: Maps SQL types to JSON Schema instance types (INTEGER, REAL, TEXT, BLOB, BOOLEAN)
+
+### Future Enhancements
+
+- SeaORM entity introspection
+- PostgreSQL support
+- Additional constraint types
+- Pydantic model generation
 
 Run tests:
 
