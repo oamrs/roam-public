@@ -192,7 +192,9 @@ pub fn introspect_sqlite_path(path: &str) -> Result<SchemaModel> {
 	let mut tables: Vec<Table> = Vec::new();
 
 	for t in table_names {
-		let mut cols_stmt = conn.prepare(&format!("PRAGMA table_info('{}')", t))?;
+		let escaped_table_name = t.replace('\'', "''");
+		let pragma_sql = format!("PRAGMA table_info('{}')", escaped_table_name);
+		let mut cols_stmt = conn.prepare(&pragma_sql)?;
 		let cols = cols_stmt
 			.query_map([], |row| {
 				let name: String = row.get(1)?;
