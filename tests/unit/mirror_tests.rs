@@ -500,7 +500,10 @@ fn json_schema_preserves_table_structure() {
     
     // The JSON should mention "users" table somewhere
     // (we don't assert exact structure yet, just that it's present)
-    assert!(json_str.len() > 0, "json schema should have content");
+    assert!(
+        json_str.contains("users"),
+        "json schema should mention the 'users' table"
+    );
 }
 
 #[test]
