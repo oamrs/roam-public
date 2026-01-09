@@ -3,7 +3,7 @@
 /// These tests verify that SeaORM models with ActiveModelBehavior hooks
 /// properly dispatch events when critical status changes occur.
 
-use oam::interceptor::{CriticalStatusEvent, EventBus, get_event_bus, CriticalModelBehavior, HasCriticalStatus};
+use oam::interceptor::{CriticalStatusEvent, Event, EventBus, get_event_bus, CriticalModelBehavior, HasCriticalStatus};
 use std::sync::Mutex;
 use once_cell::sync::Lazy;
 
@@ -280,4 +280,197 @@ impl MockDb {
     pub fn new() -> Self {
         MockDb
     }
+}
+
+// ============================================================================
+// PHASE 1A: Generalized Event System Tests (Failing - RED phase)
+// ============================================================================
+// These tests define the contract for a more flexible event system that can
+// handle multiple event types beyond just CRITICAL status changes.
+
+/// FAILING TEST: Event trait allows multiple event types
+///
+/// TDD phase: RED - This test will fail until Event trait is implemented
+///
+/// Events should be able to represent different types of changes:
+/// - StatusChange events (current)
+/// - ColumnChange events (new)
+/// - ConstraintViolation events (new)
+/// - Transaction events (new)
+#[tokio::test]
+async fn event_trait_supports_multiple_event_types() {
+    let _lock = _acquire_test_lock();
+    
+    // GIVEN: Different event types
+    let status_event = Event::status_change(
+        "Alert".to_string(),
+        "alert-001".to_string(),
+        "CRITICAL".to_string(),
+        "2024-01-09T10:00:00Z".to_string(),
+    );
+    
+    let column_event = Event::column_change(
+        "User".to_string(),
+        "user-42".to_string(),
+        "email".to_string(),
+        "old@example.com".to_string(),
+        "new@example.com".to_string(),
+        "2024-01-09T10:05:00Z".to_string(),
+    );
+    
+    // WHEN: We dispatch them to the event bus
+    let event_bus = EventBus::new();
+    event_bus.dispatch_generic(&status_event).unwrap();
+    event_bus.dispatch_generic(&column_event).unwrap();
+    
+    // THEN: Both events should be stored
+    let events = event_bus.all_events().unwrap();
+    assert_eq!(events.len(), 2, "EventBus should store multiple event types");
+}
+
+/// FAILING TEST: Events can be filtered by type
+///
+/// TDD phase: RED - Event filtering by type is not implemented
+///
+/// The system should be able to query events by their type, allowing
+/// subscribers to listen only to events they care about.
+#[tokio::test]
+async fn event_bus_filters_events_by_type() {
+    let _lock = _acquire_test_lock();
+    
+    // GIVEN: Mixed event types in the bus
+    let status_event = Event::status_change(
+        "Alert".to_string(),
+        "alert-001".to_string(),
+        "CRITICAL".to_string(),
+        "2024-01-09T10:00:00Z".to_string(),
+    );
+    
+    let column_event = Event::column_change(
+        "User".to_string(),
+        "user-42".to_string(),
+        "email".to_string(),
+        "old@example.com".to_string(),
+        "new@example.com".to_string(),
+        "2024-01-09T10:05:00Z".to_string(),
+    );
+    
+    let event_bus = EventBus::new();
+    event_bus.dispatch_generic(&status_event).unwrap();
+    event_bus.dispatch_generic(&column_event).unwrap();
+    
+    // WHEN: We filter events by type
+    let status_only = event_bus.events_by_type("StatusChange").unwrap();
+    let column_only = event_bus.events_by_type("ColumnChange").unwrap();
+    
+    // THEN: Only matching events are returned
+    assert_eq!(status_only.len(), 1, "Should filter status change events");
+    assert_eq!(column_only.len(), 1, "Should filter column change events");
+}
+
+/// FAILING TEST: Events carry type-specific metadata
+///
+/// TDD phase: RED - Event::column_change and other variants not implemented
+///
+/// Different event types should carry different metadata:
+/// - StatusChange: entity_type, entity_id, status, timestamp
+/// - ColumnChange: entity_type, entity_id, column_name, old_value, new_value, timestamp
+/// - ConstraintViolation: entity_type, entity_id, constraint_name, reason, timestamp
+#[tokio::test]
+async fn event_types_have_specific_metadata() {
+    let _lock = _acquire_test_lock();
+    
+    // GIVEN: A column change event
+    let column_event = Event::column_change(
+        "Order".to_string(),
+        "order-789".to_string(),
+        "status".to_string(),
+        "PENDING".to_string(),
+        "SHIPPED".to_string(),
+        "2024-01-09T11:30:00Z".to_string(),
+    );
+    
+    // WHEN: We query the event metadata
+    let metadata = column_event.metadata();
+    
+    // THEN: Metadata contains type-specific fields
+    assert_eq!(metadata.get("event_type").unwrap(), "ColumnChange");
+    assert_eq!(metadata.get("entity_type").unwrap(), "Order");
+    assert_eq!(metadata.get("entity_id").unwrap(), "order-789");
+    assert_eq!(metadata.get("column_name").unwrap(), "status");
+    assert_eq!(metadata.get("old_value").unwrap(), "PENDING");
+    assert_eq!(metadata.get("new_value").unwrap(), "SHIPPED");
+}
+
+/// FAILING TEST: EventBus supports generic dispatch
+///
+/// TDD phase: RED - dispatch_generic() method not implemented
+///
+/// The EventBus should accept a generic Event enum instead of just
+/// CriticalStatusEvent, enabling a unified dispatch mechanism.
+#[tokio::test]
+async fn event_bus_generic_dispatch() {
+    let _lock = _acquire_test_lock();
+    
+    let event_bus = EventBus::new();
+    
+    // GIVEN: Various event types to dispatch
+    let events = vec![
+        Event::status_change(
+            "Alert".to_string(),
+            "a1".to_string(),
+            "CRITICAL".to_string(),
+            "2024-01-09T10:00:00Z".to_string(),
+        ),
+        Event::column_change(
+            "User".to_string(),
+            "u1".to_string(),
+            "name".to_string(),
+            "Alice".to_string(),
+            "Alice Smith".to_string(),
+            "2024-01-09T10:01:00Z".to_string(),
+        ),
+        Event::constraint_violation(
+            "Product".to_string(),
+            "p1".to_string(),
+            "fk_category".to_string(),
+            "Foreign key constraint violated: category_id does not exist".to_string(),
+            "2024-01-09T10:02:00Z".to_string(),
+        ),
+    ];
+    
+    // WHEN: We dispatch all events generically
+    for event in events {
+        event_bus.dispatch_generic(&event).unwrap();
+    }
+    
+    // THEN: All events are stored
+    let all_events = event_bus.all_events().unwrap();
+    assert_eq!(all_events.len(), 3, "All event types should be stored");
+}
+
+/// FAILING TEST: Events persist through serialization
+///
+/// TDD phase: RED - Event serialization not implemented
+///
+/// Events should be serializable so they can be logged, persisted to disk,
+/// or transmitted over the network.
+#[tokio::test]
+async fn event_serialization() {
+    let _lock = _acquire_test_lock();
+    
+    // GIVEN: Various event types
+    let status_event = Event::status_change(
+        "Alert".to_string(),
+        "alert-123".to_string(),
+        "WARNING".to_string(),
+        "2024-01-09T12:00:00Z".to_string(),
+    );
+    
+    // WHEN: We serialize the event
+    let json = serde_json::to_string(&status_event).unwrap();
+    let deserialized: Event = serde_json::from_str(&json).unwrap();
+    
+    // THEN: Deserialized event equals original
+    assert_eq!(status_event, deserialized, "Events should survive serialization");
 }
