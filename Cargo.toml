@@ -1,7 +1,13 @@
 [package]
-name = "roam"
+name = "oam"
 version = "0.1.0"
 edition = "2021"
+description = "Object Agent Mapping framework for distributed systems and agents"
+license = "MIT OR Apache-2.0"
+authors = ["OAMRS Contributors"]
+repository = "https://github.com/oamrs/roam"
+keywords = ["agent", "mapping", "distributed", "framework"]
+categories = ["development-tools"]
 
 [dependencies]
 rusqlite = { version = "0.29", features = ["bundled"] }
