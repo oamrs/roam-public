@@ -1,11 +1,8 @@
-/// Integration tests for OAM Event Interceptor
-/// 
-/// These tests verify that SeaORM models with ActiveModelBehavior hooks
-/// properly dispatch events when critical status changes occur.
-
-use oam::interceptor::{CriticalStatusEvent, Event, EventBus, get_event_bus, CriticalModelBehavior, HasCriticalStatus};
-use std::sync::Mutex;
+use oam::interceptor::{
+    get_event_bus, CriticalModelBehavior, CriticalStatusEvent, Event, EventBus, HasCriticalStatus,
+};
 use once_cell::sync::Lazy;
+use std::sync::Mutex;
 
 /// Global test lock to ensure test isolation for shared EventBus state
 /// Only one test that uses the global EventBus can run at a time
@@ -16,18 +13,10 @@ fn _acquire_test_lock() -> std::sync::MutexGuard<'static, ()> {
     TEST_LOCK.lock().unwrap()
 }
 
-/// FAILING TEST: Verify that after_save hook dispatches CRITICAL event
-/// 
-/// TDD phase: RED - This test should fail because the hook is not implemented yet
-/// 
-/// Scenario: A mock model is saved with status="CRITICAL"
-/// Expected: after_save hook should detect critical status and dispatch event via event bus
 #[tokio::test]
 async fn after_save_hook_dispatches_critical_status_event() {
-    // GIVEN: An event bus is created
     let event_bus = EventBus::new();
 
-    // WHEN: We simulate a model save with CRITICAL status
     let event = CriticalStatusEvent {
         entity_type: "SystemAlert".to_string(),
         entity_id: "alert-001".to_string(),
@@ -96,22 +85,13 @@ async fn after_save_hook_ignores_non_critical_status() {
     assert_eq!(events.len(), 0);
 }
 
-/// FAILING TEST: Verify that ActiveModelBehavior::after_save hook is implemented
-///
-/// TDD phase: RED - This test requires the actual hook implementation
-///
-/// This test verifies that when a SeaORM model with CRITICAL status is saved,
-/// the after_save hook is called and dispatches the event to the global event bus.
-/// The hook must integrate with the EventBus and filter for CRITICAL status.
 #[tokio::test]
 async fn model_after_save_hook_integration() {
     let _lock = _acquire_test_lock();
-    // GIVEN: We get the global event bus and clear it
+
     let event_bus = get_event_bus();
     event_bus.clear().unwrap();
 
-    // WHEN: We simulate a model save with CRITICAL status by dispatching to global bus
-    // In the real implementation, this would be triggered by SeaORM's after_save hook
     let event = CriticalStatusEvent {
         entity_type: "HealthCheck".to_string(),
         entity_id: "health-001".to_string(),
@@ -124,23 +104,15 @@ async fn model_after_save_hook_integration() {
 
     // THEN: The event should be in the global event bus
     let events = event_bus.events().unwrap();
-    assert!(!events.is_empty(), "after_save hook should dispatch CRITICAL events to the event bus");
+    assert!(
+        !events.is_empty(),
+        "after_save hook should dispatch CRITICAL events to the event bus"
+    );
     assert_eq!(events[0].status, "CRITICAL");
-    
-    // Cleanup for other tests
+
     event_bus.clear().unwrap();
 }
 
-/// FAILING TEST: Verify that ActiveModelBehavior::after_save hook dispatches CRITICAL events automatically
-///
-/// TDD phase: RED - This test will fail until after_save hook extracts status from model
-/// and automatically dispatches to the global event bus.
-///
-/// This test verifies that when a SeaORM model is saved, the after_save hook:
-/// 1. Extracts the model's status field
-/// 2. If status == "CRITICAL", creates a CriticalStatusEvent
-/// 3. Dispatches the event to the global EventBus
-/// 4. Does NOT dispatch non-CRITICAL events
 #[tokio::test]
 async fn active_model_behavior_auto_dispatches_critical_on_save() {
     let _lock = _acquire_test_lock();
@@ -155,7 +127,6 @@ async fn active_model_behavior_auto_dispatches_critical_on_save() {
     };
 
     // WHEN: The model's after_save hook is called (simulating SeaORM save operation)
-    // NOTE: This will fail to compile until CriticalModelBehavior::after_save is implemented
     let _saved = CriticalModelBehavior::after_save(model, &MockDb::new(), true)
         .await
         .expect("after_save should succeed");
@@ -163,19 +134,18 @@ async fn active_model_behavior_auto_dispatches_critical_on_save() {
     // THEN: The event should be automatically dispatched to the global bus
     let event_bus = get_event_bus();
     let events = event_bus.events().unwrap();
-    
-    assert!(!events.is_empty(), "after_save hook should auto-dispatch CRITICAL events");
+
+    assert!(
+        !events.is_empty(),
+        "after_save hook should auto-dispatch CRITICAL events"
+    );
     assert_eq!(events[0].status, "CRITICAL");
     assert_eq!(events[0].entity_type, "ServiceAlert");
     assert_eq!(events[0].entity_id, "alert-42");
-    
-    // Cleanup for other tests
+
     event_bus.clear().unwrap();
 }
 
-/// FAILING TEST: Verify that non-CRITICAL status changes are NOT auto-dispatched
-///
-/// TDD phase: RED - This test will fail until the after_save hook implements status filtering
 #[tokio::test]
 async fn active_model_behavior_filters_non_critical_status() {
     let _lock = _acquire_test_lock();
@@ -197,20 +167,16 @@ async fn active_model_behavior_filters_non_critical_status() {
     // THEN: The event should NOT be dispatched (no event added to bus)
     let event_bus = get_event_bus();
     let initial_count = event_bus.events().unwrap().len();
-    
+
     // After save with non-CRITICAL status, count should not increase
     assert!(
         event_bus.events().unwrap().len() == initial_count,
         "non-CRITICAL status should not trigger auto-dispatch"
     );
-    
-    // Cleanup for other tests
+
     event_bus.clear().unwrap();
 }
 
-/// FAILING TEST: Verify that after_save hook sets proper event metadata
-///
-/// TDD phase: RED - This test ensures events created by after_save have correct metadata
 #[tokio::test]
 async fn active_model_behavior_sets_event_metadata() {
     let _lock = _acquire_test_lock();
@@ -238,8 +204,7 @@ async fn active_model_behavior_sets_event_metadata() {
     assert_eq!(last_event.entity_id, "corrupt-001");
     assert_eq!(last_event.status, "CRITICAL");
     assert_eq!(last_event.timestamp, "2024-01-08T10:40:00Z");
-    
-    // Cleanup for other tests
+
     event_bus.clear().unwrap();
 }
 
@@ -282,33 +247,17 @@ impl MockDb {
     }
 }
 
-// ============================================================================
-// PHASE 1A: Generalized Event System Tests (Failing - RED phase)
-// ============================================================================
-// These tests define the contract for a more flexible event system that can
-// handle multiple event types beyond just CRITICAL status changes.
-
-/// FAILING TEST: Event trait allows multiple event types
-///
-/// TDD phase: RED - This test will fail until Event trait is implemented
-///
-/// Events should be able to represent different types of changes:
-/// - StatusChange events (current)
-/// - ColumnChange events (new)
-/// - ConstraintViolation events (new)
-/// - Transaction events (new)
 #[tokio::test]
 async fn event_trait_supports_multiple_event_types() {
     let _lock = _acquire_test_lock();
-    
-    // GIVEN: Different event types
+
     let status_event = Event::status_change(
         "Alert".to_string(),
         "alert-001".to_string(),
         "CRITICAL".to_string(),
         "2024-01-09T10:00:00Z".to_string(),
     );
-    
+
     let column_event = Event::column_change(
         "User".to_string(),
         "user-42".to_string(),
@@ -317,35 +266,32 @@ async fn event_trait_supports_multiple_event_types() {
         "new@example.com".to_string(),
         "2024-01-09T10:05:00Z".to_string(),
     );
-    
-    // WHEN: We dispatch them to the event bus
+
     let event_bus = EventBus::new();
     event_bus.dispatch_generic(&status_event).unwrap();
     event_bus.dispatch_generic(&column_event).unwrap();
-    
-    // THEN: Both events should be stored
+
     let events = event_bus.all_events().unwrap();
-    assert_eq!(events.len(), 2, "EventBus should store multiple event types");
+    assert_eq!(
+        events.len(),
+        2,
+        "EventBus should store multiple event types"
+    );
 }
 
-/// FAILING TEST: Events can be filtered by type
-///
-/// TDD phase: RED - Event filtering by type is not implemented
-///
 /// The system should be able to query events by their type, allowing
 /// subscribers to listen only to events they care about.
 #[tokio::test]
 async fn event_bus_filters_events_by_type() {
     let _lock = _acquire_test_lock();
-    
-    // GIVEN: Mixed event types in the bus
+
     let status_event = Event::status_change(
         "Alert".to_string(),
         "alert-001".to_string(),
         "CRITICAL".to_string(),
         "2024-01-09T10:00:00Z".to_string(),
     );
-    
+
     let column_event = Event::column_change(
         "User".to_string(),
         "user-42".to_string(),
@@ -354,33 +300,22 @@ async fn event_bus_filters_events_by_type() {
         "new@example.com".to_string(),
         "2024-01-09T10:05:00Z".to_string(),
     );
-    
+
     let event_bus = EventBus::new();
     event_bus.dispatch_generic(&status_event).unwrap();
     event_bus.dispatch_generic(&column_event).unwrap();
-    
-    // WHEN: We filter events by type
+
     let status_only = event_bus.events_by_type("StatusChange").unwrap();
     let column_only = event_bus.events_by_type("ColumnChange").unwrap();
-    
-    // THEN: Only matching events are returned
+
     assert_eq!(status_only.len(), 1, "Should filter status change events");
     assert_eq!(column_only.len(), 1, "Should filter column change events");
 }
 
-/// FAILING TEST: Events carry type-specific metadata
-///
-/// TDD phase: RED - Event::column_change and other variants not implemented
-///
-/// Different event types should carry different metadata:
-/// - StatusChange: entity_type, entity_id, status, timestamp
-/// - ColumnChange: entity_type, entity_id, column_name, old_value, new_value, timestamp
-/// - ConstraintViolation: entity_type, entity_id, constraint_name, reason, timestamp
 #[tokio::test]
 async fn event_types_have_specific_metadata() {
     let _lock = _acquire_test_lock();
-    
-    // GIVEN: A column change event
+
     let column_event = Event::column_change(
         "Order".to_string(),
         "order-789".to_string(),
@@ -389,11 +324,9 @@ async fn event_types_have_specific_metadata() {
         "SHIPPED".to_string(),
         "2024-01-09T11:30:00Z".to_string(),
     );
-    
-    // WHEN: We query the event metadata
+
     let metadata = column_event.metadata();
-    
-    // THEN: Metadata contains type-specific fields
+
     assert_eq!(metadata.get("event_type").unwrap(), "ColumnChange");
     assert_eq!(metadata.get("entity_type").unwrap(), "Order");
     assert_eq!(metadata.get("entity_id").unwrap(), "order-789");
@@ -402,19 +335,12 @@ async fn event_types_have_specific_metadata() {
     assert_eq!(metadata.get("new_value").unwrap(), "SHIPPED");
 }
 
-/// FAILING TEST: EventBus supports generic dispatch
-///
-/// TDD phase: RED - dispatch_generic() method not implemented
-///
-/// The EventBus should accept a generic Event enum instead of just
-/// CriticalStatusEvent, enabling a unified dispatch mechanism.
 #[tokio::test]
 async fn event_bus_generic_dispatch() {
     let _lock = _acquire_test_lock();
-    
+
     let event_bus = EventBus::new();
-    
-    // GIVEN: Various event types to dispatch
+
     let events = vec![
         Event::status_change(
             "Alert".to_string(),
@@ -438,39 +364,284 @@ async fn event_bus_generic_dispatch() {
             "2024-01-09T10:02:00Z".to_string(),
         ),
     ];
-    
-    // WHEN: We dispatch all events generically
+
     for event in events {
         event_bus.dispatch_generic(&event).unwrap();
     }
-    
-    // THEN: All events are stored
+
     let all_events = event_bus.all_events().unwrap();
     assert_eq!(all_events.len(), 3, "All event types should be stored");
 }
 
-/// FAILING TEST: Events persist through serialization
-///
-/// TDD phase: RED - Event serialization not implemented
-///
-/// Events should be serializable so they can be logged, persisted to disk,
-/// or transmitted over the network.
 #[tokio::test]
 async fn event_serialization() {
     let _lock = _acquire_test_lock();
-    
-    // GIVEN: Various event types
+
     let status_event = Event::status_change(
         "Alert".to_string(),
         "alert-123".to_string(),
         "WARNING".to_string(),
         "2024-01-09T12:00:00Z".to_string(),
     );
-    
-    // WHEN: We serialize the event
+
     let json = serde_json::to_string(&status_event).unwrap();
     let deserialized: Event = serde_json::from_str(&json).unwrap();
-    
-    // THEN: Deserialized event equals original
-    assert_eq!(status_event, deserialized, "Events should survive serialization");
+
+    assert_eq!(
+        status_event, deserialized,
+        "Events should survive serialization"
+    );
+}
+
+/// Events should be written to a durable log so they survive process restarts.
+/// This enables event replay, auditing, and historical analysis.
+#[tokio::test]
+async fn event_bus_persists_to_log() {
+    let _lock = _acquire_test_lock();
+
+    // GIVEN: A new EventBus
+    let event_bus = EventBus::new();
+
+    // WHEN: We dispatch events
+    let events = vec![
+        Event::status_change(
+            "Alert".to_string(),
+            "a1".to_string(),
+            "CRITICAL".to_string(),
+            "2024-01-11T10:00:00Z".to_string(),
+        ),
+        Event::column_change(
+            "User".to_string(),
+            "u1".to_string(),
+            "email".to_string(),
+            "old@example.com".to_string(),
+            "new@example.com".to_string(),
+            "2024-01-11T10:01:00Z".to_string(),
+        ),
+    ];
+
+    for event in &events {
+        event_bus.dispatch_generic(event).unwrap();
+    }
+
+    // THEN: Events are persisted to the event log
+    let persisted = event_bus.persisted_events().unwrap();
+    assert_eq!(persisted.len(), 2, "All events should be persisted");
+    assert_eq!(persisted[0].event_type(), "StatusChange");
+    assert_eq!(persisted[1].event_type(), "ColumnChange");
+}
+
+/// Events persisted to a log should be loadable, enabling replay and recovery.
+#[tokio::test]
+async fn event_bus_loads_persisted_events() {
+    let _lock = _acquire_test_lock();
+
+    // GIVEN: An EventBus with some persisted events
+    let event_bus = EventBus::new();
+    let event = Event::status_change(
+        "Alert".to_string(),
+        "a1".to_string(),
+        "CRITICAL".to_string(),
+        "2024-01-11T10:00:00Z".to_string(),
+    );
+    event_bus.dispatch_generic(&event).unwrap();
+
+    // WHEN: We load events from the persistent log
+    let loaded = event_bus.load_from_log().unwrap();
+
+    // THEN: Loaded events match what was persisted
+    assert!(!loaded.is_empty(), "Should load persisted events");
+    assert_eq!(loaded[0].event_type(), "StatusChange");
+}
+
+/// The event bus should support multiple subscribers that get notified
+/// when new events are dispatched. This enables decoupled event handlers.
+#[tokio::test]
+async fn event_bus_register_subscriber() {
+    let _lock = _acquire_test_lock();
+
+    // GIVEN: An EventBus and a subscriber callback
+    let event_bus = EventBus::new();
+    let subscriber_called = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let subscriber_called_clone = subscriber_called.clone();
+
+    // WHEN: We register a subscriber
+    let subscriber_id = event_bus
+        .register_subscriber(Box::new(move |event| {
+            if event.event_type() == "StatusChange" {
+                subscriber_called_clone.store(true, std::sync::atomic::Ordering::SeqCst);
+            }
+        }))
+        .unwrap();
+
+    // THEN: Subscriber is registered
+    assert!(subscriber_id > 0, "Subscriber should get a positive ID");
+}
+
+/// When an event is dispatched, all registered subscribers should be notified.
+#[tokio::test]
+async fn event_bus_notifies_subscribers() {
+    let _lock = _acquire_test_lock();
+
+    // GIVEN: An EventBus with a registered subscriber
+    let event_bus = EventBus::new();
+    let notification_count = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let count_clone = notification_count.clone();
+
+    event_bus
+        .register_subscriber(Box::new(move |_event| {
+            count_clone.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        }))
+        .unwrap();
+
+    // WHEN: We dispatch an event
+    let event = Event::status_change(
+        "Alert".to_string(),
+        "a1".to_string(),
+        "CRITICAL".to_string(),
+        "2024-01-11T10:00:00Z".to_string(),
+    );
+    event_bus.dispatch_generic(&event).unwrap();
+
+    // THEN: Subscriber is notified
+    assert_eq!(
+        notification_count.load(std::sync::atomic::Ordering::SeqCst),
+        1,
+        "Subscriber should be notified of the event"
+    );
+}
+
+/// Multiple subscribers should be able to listen to the same event stream,
+/// each receiving a copy of all events.
+#[tokio::test]
+async fn event_bus_multiple_subscribers() {
+    let _lock = _acquire_test_lock();
+
+    // GIVEN: An EventBus with multiple subscribers
+    let event_bus = EventBus::new();
+    let count1 = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let count2 = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let count1_clone = count1.clone();
+    let count2_clone = count2.clone();
+
+    event_bus
+        .register_subscriber(Box::new(move |_event| {
+            count1_clone.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        }))
+        .unwrap();
+
+    event_bus
+        .register_subscriber(Box::new(move |_event| {
+            count2_clone.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        }))
+        .unwrap();
+
+    // WHEN: We dispatch an event
+    let event = Event::column_change(
+        "User".to_string(),
+        "u1".to_string(),
+        "name".to_string(),
+        "Alice".to_string(),
+        "Alice Smith".to_string(),
+        "2024-01-11T10:00:00Z".to_string(),
+    );
+    event_bus.dispatch_generic(&event).unwrap();
+
+    // THEN: Both subscribers are notified
+    assert_eq!(
+        count1.load(std::sync::atomic::Ordering::SeqCst),
+        1,
+        "Subscriber 1 should be notified"
+    );
+    assert_eq!(
+        count2.load(std::sync::atomic::Ordering::SeqCst),
+        1,
+        "Subscriber 2 should be notified"
+    );
+}
+
+/// Subscribers should be able to unregister and stop receiving events.
+#[tokio::test]
+async fn event_bus_unregister_subscriber() {
+    let _lock = _acquire_test_lock();
+
+    // GIVEN: An EventBus with a registered subscriber
+    let event_bus = EventBus::new();
+    let count = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let count_clone = count.clone();
+
+    let subscriber_id = event_bus
+        .register_subscriber(Box::new(move |_event| {
+            count_clone.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        }))
+        .unwrap();
+
+    // WHEN: We unregister the subscriber
+    event_bus.unregister_subscriber(subscriber_id).unwrap();
+
+    // AND: We dispatch an event
+    let event = Event::constraint_violation(
+        "Order".to_string(),
+        "o1".to_string(),
+        "fk_customer".to_string(),
+        "Customer ID does not exist".to_string(),
+        "2024-01-11T10:00:00Z".to_string(),
+    );
+    event_bus.dispatch_generic(&event).unwrap();
+
+    // THEN: Subscriber is not notified
+    assert_eq!(
+        count.load(std::sync::atomic::Ordering::SeqCst),
+        0,
+        "Unregistered subscriber should not be notified"
+    );
+}
+
+/// Subscribers should be able to subscribe only to specific event types
+/// to reduce unnecessary callback invocations.
+#[tokio::test]
+async fn event_bus_subscriber_filters_by_type() {
+    let _lock = _acquire_test_lock();
+
+    // GIVEN: An EventBus with a subscriber that filters by event type
+    let event_bus = EventBus::new();
+    let status_count = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let status_count_clone = status_count.clone();
+
+    event_bus
+        .register_subscriber_for_type(
+            "StatusChange",
+            Box::new(move |_event| {
+                status_count_clone.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            }),
+        )
+        .unwrap();
+
+    // WHEN: We dispatch different event types
+    event_bus
+        .dispatch_generic(&Event::status_change(
+            "Alert".to_string(),
+            "a1".to_string(),
+            "CRITICAL".to_string(),
+            "2024-01-11T10:00:00Z".to_string(),
+        ))
+        .unwrap();
+
+    event_bus
+        .dispatch_generic(&Event::column_change(
+            "User".to_string(),
+            "u1".to_string(),
+            "email".to_string(),
+            "old@example.com".to_string(),
+            "new@example.com".to_string(),
+            "2024-01-11T10:01:00Z".to_string(),
+        ))
+        .unwrap();
+
+    // THEN: Only StatusChange events trigger the subscriber
+    assert_eq!(
+        status_count.load(std::sync::atomic::Ordering::SeqCst),
+        1,
+        "Subscriber should only receive StatusChange events"
+    );
 }

@@ -1,9 +1,8 @@
-pub mod mirror;
 pub mod interceptor;
+pub mod mirror;
 
 // Re-export commonly used types
-pub use mirror::{SchemaModel, Table, Column, ForeignKey, CompositeForeignKey};
-pub use interceptor::{CriticalStatusEvent, Event, EventBus, get_event_bus, CriticalModelBehavior, HasCriticalStatus};
-
-
-
+pub use interceptor::{
+    get_event_bus, CriticalModelBehavior, CriticalStatusEvent, Event, EventBus, HasCriticalStatus,
+};
+pub use mirror::{Column, CompositeForeignKey, ForeignKey, SchemaModel, Table};
