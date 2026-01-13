@@ -233,23 +233,26 @@ impl EventBus {
             .push(event.clone());
 
         // Notify all subscribers
-        let subscribers = self
-            .subscribers
-            .lock()
-            .map_err(|e| format!("Failed to acquire lock: {}", e))?;
-        for (_id, callback) in subscribers.iter() {
-            callback(event);
+        {
+            let subscribers = self
+                .subscribers
+                .lock()
+                .map_err(|e| format!("Failed to acquire lock: {}", e))?;
+            for (_id, callback) in subscribers.iter() {
+                callback(event);
+            }
         }
-        drop(subscribers);
 
         // Notify type-specific subscribers
-        let type_subs = self
-            .type_subscribers
-            .lock()
-            .map_err(|e| format!("Failed to acquire lock: {}", e))?;
-        if let Some(callbacks) = type_subs.get(event.event_type()) {
-            for callback in callbacks {
-                callback(event);
+        {
+            let type_subs = self
+                .type_subscribers
+                .lock()
+                .map_err(|e| format!("Failed to acquire lock: {}", e))?;
+            if let Some(callbacks) = type_subs.get(event.event_type()) {
+                for callback in callbacks {
+                    callback(event);
+                }
             }
         }
 

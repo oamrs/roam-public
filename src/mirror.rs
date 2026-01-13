@@ -180,6 +180,92 @@ fn detect_enum_values(sql_text: &str, col_name: &str) -> Option<Vec<String>> {
 /// Minimal SQLite introspector. This is intentionally tiny and contains a
 /// deliberate inversion bug in the `nullable` detection so the TDD test
 /// will compile but fail for a different reason (assertion about nullability).
+fn extract_foreign_keys(
+    conn: &rusqlite::Connection,
+    table_name: &str,
+) -> rusqlite::Result<(Vec<ForeignKey>, Vec<CompositeForeignKey>)> {
+    let mut fk_stmt = conn.prepare(&format!(
+        "PRAGMA foreign_key_list('{}')",
+        table_name.replace('\'', "''")
+    ))?;
+
+    let fk_rows = fk_stmt
+        .query_map([], |row| {
+            // Columns: id, seq, table, from, to, on_update, on_delete, match
+            let id: i64 = row.get(0)?;
+            let seq: i64 = row.get(1)?;
+            let referenced_table: String = row.get(2)?;
+            let from_col: String = row.get(3)?;
+            let to_col: String = row.get(4)?;
+            let on_update: String = row.get(5)?;
+            let on_delete: String = row.get(6)?;
+            Ok((
+                id,
+                seq,
+                referenced_table,
+                from_col,
+                to_col,
+                on_update,
+                on_delete,
+            ))
+        })?
+        .collect::<Result<Vec<_>, _>>()?;
+
+    // Group foreign key columns by their FK id
+    let mut groups: BTreeMap<i64, Vec<(i64, String, String)>> = BTreeMap::new();
+    let mut id_to_table: std::collections::HashMap<i64, String> = std::collections::HashMap::new();
+    let mut id_to_on_delete: std::collections::HashMap<i64, String> =
+        std::collections::HashMap::new();
+    let mut id_to_on_update: std::collections::HashMap<i64, String> =
+        std::collections::HashMap::new();
+
+    for (id, seq, ref_table, from_col, to_col, on_update, on_delete) in fk_rows {
+        groups.entry(id).or_default().push((seq, from_col, to_col));
+        id_to_table.entry(id).or_insert(ref_table);
+        id_to_on_delete.entry(id).or_insert(on_delete);
+        id_to_on_update.entry(id).or_insert(on_update);
+    }
+
+    // Separate single-column and composite FKs
+    let mut single_fks: Vec<ForeignKey> = Vec::new();
+    let mut composite_fks: Vec<CompositeForeignKey> = Vec::new();
+
+    for (id, mut rows) in groups {
+        rows.sort_by_key(|r| r.0); // Preserve column order
+        let ref_table = id_to_table.get(&id).cloned().unwrap_or_default();
+        let on_delete_str = id_to_on_delete.get(&id).cloned();
+        let on_update_str = id_to_on_update.get(&id).cloned();
+
+        // Convert empty string or "NO ACTION" to None
+        let on_delete = on_delete_str.filter(|s| !s.is_empty() && s != "NO ACTION");
+        let on_update = on_update_str.filter(|s| !s.is_empty() && s != "NO ACTION");
+
+        if rows.len() == 1 {
+            let (_seq, from_col, to_col) = rows.into_iter().next().unwrap();
+            single_fks.push(ForeignKey {
+                column: from_col,
+                referenced_table: ref_table,
+                referenced_column: to_col,
+                on_delete: on_delete.clone(),
+                on_update: on_update.clone(),
+            });
+        } else {
+            let columns: Vec<String> = rows.iter().map(|r| r.1.clone()).collect();
+            let referenced_columns: Vec<String> = rows.iter().map(|r| r.2.clone()).collect();
+            composite_fks.push(CompositeForeignKey {
+                columns,
+                referenced_table: ref_table,
+                referenced_columns,
+                on_delete,
+                on_update,
+            });
+        }
+    }
+
+    Ok((single_fks, composite_fks))
+}
+
+/// Minimal SQLite introspector.
 pub fn introspect_sqlite_path(path: &str) -> Result<SchemaModel> {
     let conn = Connection::open(path)?;
 
@@ -194,6 +280,7 @@ pub fn introspect_sqlite_path(path: &str) -> Result<SchemaModel> {
     let mut tables: Vec<Table> = Vec::new();
 
     for t in table_names {
+        // Extract columns
         let mut cols_stmt = conn.prepare(&format!("PRAGMA table_info('{}')", t))?;
         let cols = cols_stmt
             .query_map([], |row| {
@@ -204,23 +291,20 @@ pub fn introspect_sqlite_path(path: &str) -> Result<SchemaModel> {
                 Ok(Column {
                     name,
                     sql_type,
-                    // Correct logic: `notnull` is 0 when column is nullable.
                     nullable: notnull == 0,
                     primary_key: pk != 0,
-                    // enum detection not implemented yet
                     enum_values: None,
                 })
             })?
             .collect::<Result<Vec<Column>, _>>()?;
 
-        // Attempt to detect enum-like CHECK constraints from the CREATE TABLE SQL
+        // Detect enum values from CHECK constraints
         let mut create_sql_stmt =
             conn.prepare("SELECT sql FROM sqlite_master WHERE type='table' AND name = ?")?;
         let create_sql: Option<String> = create_sql_stmt
             .query_row([t.as_str()], |row| row.get(0))
             .optional()?;
 
-        // If we have CREATE SQL, try to find CHECK(column IN (...)) patterns
         let mut cols_with_enums: std::collections::HashMap<String, Vec<String>> =
             std::collections::HashMap::new();
         if let Some(sql_text) = create_sql {
@@ -231,7 +315,6 @@ pub fn introspect_sqlite_path(path: &str) -> Result<SchemaModel> {
             }
         }
 
-        // Attach enum values to columns where detected
         let cols = cols
             .into_iter()
             .map(|mut c| {
@@ -242,87 +325,14 @@ pub fn introspect_sqlite_path(path: &str) -> Result<SchemaModel> {
             })
             .collect::<Vec<Column>>();
 
-        // Extract foreign keys for this table (SQLite PRAGMA foreign_key_list)
-        // PRAGMA foreign_key_list returns one row per column in the FK with an `id`
-        // grouping columns that belong to the same (possibly composite) FK.
-        let mut fk_stmt = conn.prepare(&format!("PRAGMA foreign_key_list('{}')", t))?;
-        let fk_rows = fk_stmt
-            .query_map([], |row| {
-                // Columns: id, seq, table, from, to, on_update, on_delete, match
-                let id: i64 = row.get(0)?;
-                let seq: i64 = row.get(1)?;
-                let referenced_table: String = row.get(2)?;
-                let from_col: String = row.get(3)?; // 'from'
-                let to_col: String = row.get(4)?; // 'to'
-                let on_update: String = row.get(5)?;
-                let on_delete: String = row.get(6)?;
-                Ok((
-                    id,
-                    seq,
-                    referenced_table,
-                    from_col,
-                    to_col,
-                    on_update,
-                    on_delete,
-                ))
-            })?
-            .collect::<Result<Vec<_>, _>>()?;
-
-        use std::collections::BTreeMap;
-        let mut groups: BTreeMap<i64, Vec<(i64, String, String)>> = BTreeMap::new();
-        let mut id_to_table: std::collections::HashMap<i64, String> =
-            std::collections::HashMap::new();
-        let mut id_to_on_delete: std::collections::HashMap<i64, String> =
-            std::collections::HashMap::new();
-        let mut id_to_on_update: std::collections::HashMap<i64, String> =
-            std::collections::HashMap::new();
-        for (id, seq, ref_table, from_col, to_col, on_update, on_delete) in fk_rows {
-            groups.entry(id).or_default().push((seq, from_col, to_col));
-            id_to_table.entry(id).or_insert(ref_table);
-            id_to_on_delete.entry(id).or_insert(on_delete);
-            id_to_on_update.entry(id).or_insert(on_update);
-        }
-
-        let mut single_fks: Vec<ForeignKey> = Vec::new();
-        let mut composite_fks: Vec<CompositeForeignKey> = Vec::new();
-
-        for (id, mut rows) in groups {
-            // sort by seq to preserve column order
-            rows.sort_by_key(|r| r.0);
-            let ref_table = id_to_table.get(&id).cloned().unwrap_or_default();
-            let on_delete_str = id_to_on_delete.get(&id).cloned();
-            let on_update_str = id_to_on_update.get(&id).cloned();
-            // Convert empty string or "NO ACTION" to None (SQLite returns "NO ACTION" as default)
-            let on_delete = on_delete_str.filter(|s| !s.is_empty() && s != "NO ACTION");
-            let on_update = on_update_str.filter(|s| !s.is_empty() && s != "NO ACTION");
-
-            if rows.len() == 1 {
-                let (_seq, from_col, to_col) = rows.into_iter().next().unwrap();
-                single_fks.push(ForeignKey {
-                    column: from_col,
-                    referenced_table: ref_table,
-                    referenced_column: to_col,
-                    on_delete: on_delete.clone(),
-                    on_update: on_update.clone(),
-                });
-            } else {
-                let columns: Vec<String> = rows.iter().map(|r| r.1.clone()).collect();
-                let referenced_columns: Vec<String> = rows.iter().map(|r| r.2.clone()).collect();
-                composite_fks.push(CompositeForeignKey {
-                    columns,
-                    referenced_table: ref_table,
-                    referenced_columns,
-                    on_delete: on_delete.clone(),
-                    on_update: on_update.clone(),
-                });
-            }
-        }
+        // Extract foreign keys
+        let (foreign_keys, composite_foreign_keys) = extract_foreign_keys(&conn, &t)?;
 
         tables.push(Table {
             name: t,
             columns: cols,
-            foreign_keys: single_fks,
-            composite_foreign_keys: composite_fks,
+            foreign_keys,
+            composite_foreign_keys,
         });
     }
 

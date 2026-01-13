@@ -53,10 +53,6 @@ fn introspect_simple_sqlite_file_err_case() {
 
 #[test]
 fn sqlite_detects_foreign_key_posts_user_id() {
-    // This test asserts that the mirror detects foreign keys. It is
-    // intentionally written to fail at this stage (TDD) because the
-    // `Table` model does not yet expose `foreign_keys`.
-
     let tmp = NamedTempFile::new().expect("create tmp file");
     let path = tmp.path().to_str().unwrap().to_string();
 
@@ -78,7 +74,6 @@ fn sqlite_detects_foreign_key_posts_user_id() {
         .expect("posts table exists");
 
     // Expect a foreign_keys field on Table with an entry for user_id -> users.id
-    // This will fail to compile/run until foreign key detection is implemented.
     let fk = posts
         .foreign_keys
         .iter()
@@ -159,8 +154,6 @@ fn sqlite_detects_nullable_foreign_key_err_case() {
 #[test]
 fn sqlite_detects_composite_foreign_key() {
     // Create a temp SQLite file and tables with a composite foreign key.
-    // This test is expected to fail until composite-FK support is added to the
-    // mirror introspector.
     let tmp = NamedTempFile::new().expect("create tmp file");
     let path = tmp.path().to_str().unwrap().to_string();
 
@@ -181,8 +174,6 @@ fn sqlite_detects_composite_foreign_key() {
         .find(|t| t.name == "children")
         .expect("children table exists");
 
-    // Expect a composite_foreign_keys field or equivalent representation.
-    // This will fail to compile/run until composite FK support is implemented.
     let cfk = children
         .composite_foreign_keys
         .iter()
