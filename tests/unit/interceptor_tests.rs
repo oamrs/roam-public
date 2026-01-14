@@ -90,7 +90,6 @@ async fn model_after_save_hook_integration() {
     let _lock = _acquire_test_lock();
 
     let event_bus = get_event_bus();
-    event_bus.clear().unwrap();
 
     let event = CriticalStatusEvent {
         entity_type: "HealthCheck".to_string(),
@@ -117,7 +116,6 @@ async fn model_after_save_hook_integration() {
 async fn active_model_behavior_auto_dispatches_critical_on_save() {
     let _lock = _acquire_test_lock();
     // GIVEN: A mock SeaORM model with CRITICAL status
-    get_event_bus().clear().unwrap();
     let model = MockCriticalModel {
         id: 42,
         entity_type: "ServiceAlert".to_string(),
@@ -150,7 +148,6 @@ async fn active_model_behavior_auto_dispatches_critical_on_save() {
 async fn active_model_behavior_filters_non_critical_status() {
     let _lock = _acquire_test_lock();
     // GIVEN: A mock model with WARNING (non-CRITICAL) status
-    get_event_bus().clear().unwrap();
     let model = MockCriticalModel {
         id: 43,
         entity_type: "ServiceAlert".to_string(),
@@ -181,7 +178,6 @@ async fn active_model_behavior_filters_non_critical_status() {
 async fn active_model_behavior_sets_event_metadata() {
     let _lock = _acquire_test_lock();
     // GIVEN: A model with all required fields
-    get_event_bus().clear().unwrap();
     let model = MockCriticalModel {
         id: 44,
         entity_type: "DataCorruption".to_string(),
@@ -447,7 +443,7 @@ async fn event_bus_loads_persisted_events() {
     event_bus.dispatch_generic(&event).unwrap();
 
     // WHEN: We load events from the persistent log
-    let loaded = event_bus.load_from_log().unwrap();
+    let loaded = event_bus.persisted_events().unwrap();
 
     // THEN: Loaded events match what was persisted
     assert!(!loaded.is_empty(), "Should load persisted events");

@@ -17,7 +17,7 @@ fn introspect_simple_sqlite_file() {
 
     drop(conn);
 
-    // Call into the library (not implemented yet). Compilation failure is expected.
+    // Call into the library to introspect the SQLite schema.
     let schema = introspect_sqlite_path(&path).expect("introspect");
     assert!(schema.tables.iter().any(|t| t.name == "users"));
     let users = schema
@@ -569,6 +569,10 @@ fn json_schema_preserves_table_structure() {
     // The JSON should mention "users" table somewhere
     // (we don't assert exact structure yet, just that it's present)
     assert!(json_str.len() > 0, "json schema should have content");
+    assert!(
+        json_str.contains("users"),
+        "json schema should mention the users table"
+    );
 }
 
 #[test]

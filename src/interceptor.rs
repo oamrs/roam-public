@@ -205,18 +205,22 @@ impl EventBus {
     }
 
     pub fn clear(&self) -> Result<(), String> {
-        self.events
+        let mut events_guard = self
+            .events
             .lock()
-            .map_err(|e| format!("Failed to acquire lock: {}", e))
-            .map(|mut guard| guard.clear())?;
-        self.generic_events
+            .map_err(|e| format!("Failed to acquire lock: {}", e))?;
+        let mut generic_events_guard = self
+            .generic_events
             .lock()
-            .map_err(|e| format!("Failed to acquire lock: {}", e))
-            .map(|mut guard| guard.clear())?;
-        self.persisted_log
+            .map_err(|e| format!("Failed to acquire lock: {}", e))?;
+        let mut persisted_log_guard = self
+            .persisted_log
             .lock()
-            .map_err(|e| format!("Failed to acquire lock: {}", e))
-            .map(|mut guard| guard.clear())
+            .map_err(|e| format!("Failed to acquire lock: {}", e))?;
+        events_guard.clear();
+        generic_events_guard.clear();
+        persisted_log_guard.clear();
+        Ok(())
     }
 
     /// Dispatch a generic event to the bus
@@ -283,14 +287,6 @@ impl EventBus {
 
     /// Get all persisted events from the log
     pub fn persisted_events(&self) -> Result<Vec<Event>, String> {
-        self.persisted_log
-            .lock()
-            .map_err(|e| format!("Failed to acquire lock: {}", e))
-            .map(|guard| guard.clone())
-    }
-
-    /// Load events from the persistent log
-    pub fn load_from_log(&self) -> Result<Vec<Event>, String> {
         self.persisted_log
             .lock()
             .map_err(|e| format!("Failed to acquire lock: {}", e))

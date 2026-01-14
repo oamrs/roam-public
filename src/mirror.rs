@@ -177,9 +177,8 @@ fn detect_enum_values(sql_text: &str, col_name: &str) -> Option<Vec<String>> {
     }
 }
 
-/// Minimal SQLite introspector. This is intentionally tiny and contains a
-/// deliberate inversion bug in the `nullable` detection so the TDD test
-/// will compile but fail for a different reason (assertion about nullability).
+/// Minimal SQLite introspector for foreign keys. This helper is intentionally
+/// tiny and focuses only on extracting foreign key relationships.
 fn extract_foreign_keys(
     conn: &rusqlite::Connection,
     table_name: &str,
@@ -281,7 +280,9 @@ pub fn introspect_sqlite_path(path: &str) -> Result<SchemaModel> {
 
     for t in table_names {
         // Extract columns
-        let mut cols_stmt = conn.prepare(&format!("PRAGMA table_info('{}')", t))?;
+        let escaped_table_name = t.replace('\'', "''");
+        let mut cols_stmt =
+            conn.prepare(&format!("PRAGMA table_info('{}')", escaped_table_name))?;
         let cols = cols_stmt
             .query_map([], |row| {
                 let name: String = row.get(1)?;
