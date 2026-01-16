@@ -7,3 +7,6 @@ mod mirror_tests;
 
 #[path = "unit/interceptor_tests.rs"]
 mod interceptor_tests;
+
+#[path = "unit/executor_tests.rs"]
+mod executor_tests;
