@@ -25,6 +25,100 @@ pub enum QueryStatus {
     Unauthorized = 5,
 }
 
+/// Security check pattern for P2SQL validation
+enum SecurityPattern {
+    LineComment,
+    BlockComment,
+    CommandChain,
+    Pragma,
+    Explain,
+    BooleanInjection,
+    UnionInjection,
+    TimeBlindInjection,
+    SubqueryInjection,
+    DatabaseManipulation,
+}
+
+impl SecurityPattern {
+    /// Check if pattern exists in query and return error message
+    fn check(&self, query: &str, query_upper: &str) -> Option<String> {
+        match self {
+            SecurityPattern::LineComment if query.contains("--") => {
+                Some("SQL line comment syntax (--) is not allowed".to_string())
+            }
+            SecurityPattern::BlockComment if query.contains("/*") || query.contains("*/") => {
+                Some("SQL block comment syntax (/* */) is not allowed".to_string())
+            }
+            SecurityPattern::CommandChain if query.contains(';') => {
+                Some("Command chaining detected: semicolon is not allowed".to_string())
+            }
+            SecurityPattern::Pragma if query_upper.contains("PRAGMA") => {
+                Some("PRAGMA statements are not allowed".to_string())
+            }
+            SecurityPattern::Explain if query_upper.starts_with("EXPLAIN") => {
+                Some("EXPLAIN statements are not allowed".to_string())
+            }
+            SecurityPattern::BooleanInjection
+                if (query_upper.contains(" OR '") || query_upper.contains(" OR \""))
+                    && (query_upper.contains("'1'='1") || query_upper.contains("\"1\"=\"1")) =>
+            {
+                Some("Suspected boolean-based SQL injection detected".to_string())
+            }
+            SecurityPattern::UnionInjection
+                if query_upper.contains("UNION") && query_upper.contains("SELECT") =>
+            {
+                Some("UNION queries are not allowed - potential injection vector".to_string())
+            }
+            SecurityPattern::TimeBlindInjection
+                if query_upper.contains("SLEEP(") || query_upper.contains("WAITFOR") =>
+            {
+                Some("SLEEP injection detected - time-based injection not allowed".to_string())
+            }
+            SecurityPattern::SubqueryInjection
+                if query.contains("(SELECT") || query.contains("(select") =>
+            {
+                Some("Subquery injection detected - embedded SELECT not allowed".to_string())
+            }
+            SecurityPattern::DatabaseManipulation
+                if query_upper.contains("ATTACH") || query_upper.contains("DETACH") =>
+            {
+                Some("ATTACH/DETACH DATABASE statements are not allowed".to_string())
+            }
+            _ => None,
+        }
+    }
+}
+
+/// DML/DDL keyword patterns for read-only enforcement
+#[derive(PartialEq)]
+enum MutationPattern {
+    Dml,
+    Ddl,
+}
+
+impl MutationPattern {
+    /// Check if mutation keyword exists in query and return error message
+    fn check(&self, query_upper: &str) -> Option<String> {
+        match self {
+            MutationPattern::Dml
+                if query_upper.contains("INSERT")
+                    || query_upper.contains("UPDATE")
+                    || query_upper.contains("DELETE") =>
+            {
+                Some("DML statements (INSERT, UPDATE, DELETE) are not allowed".to_string())
+            }
+            MutationPattern::Ddl
+                if query_upper.contains("CREATE")
+                    || query_upper.contains("DROP")
+                    || query_upper.contains("ALTER") =>
+            {
+                Some("DDL statements (CREATE, DROP, ALTER) are not allowed".to_string())
+            }
+            _ => None,
+        }
+    }
+}
+
 /// Schema service trait for database metadata operations
 #[async_trait::async_trait]
 pub trait SchemaService: Send + Sync {
@@ -210,6 +304,35 @@ impl QueryServiceImpl {
         self.db_path = Some(db_path.to_string());
         Ok(())
     }
+
+    /// Run P2SQL security pattern checks
+    /// Returns error message if any pattern matches, None if all pass
+    fn check_security_patterns(query: &str) -> Option<String> {
+        let query_upper = query.to_uppercase();
+
+        // Check patterns in order of priority (comments first for safety)
+        [
+            SecurityPattern::LineComment,
+            SecurityPattern::BlockComment,
+            SecurityPattern::CommandChain,
+            SecurityPattern::Pragma,
+            SecurityPattern::Explain,
+            SecurityPattern::BooleanInjection,
+            SecurityPattern::UnionInjection,
+            SecurityPattern::TimeBlindInjection,
+            SecurityPattern::SubqueryInjection,
+            SecurityPattern::DatabaseManipulation,
+        ]
+        .iter()
+        .find_map(|pattern| pattern.check(query, &query_upper))
+    }
+
+    /// Check for mutation keywords (DML/DDL)
+    fn check_mutation_keywords(query_upper: &str) -> Option<String> {
+        [MutationPattern::Dml, MutationPattern::Ddl]
+            .iter()
+            .find_map(|pattern| pattern.check(query_upper))
+    }
 }
 
 impl Default for QueryServiceImpl {
@@ -240,114 +363,19 @@ impl QueryService for QueryServiceImpl {
 
         let query_upper = request.query.to_uppercase();
 
-        // Phase 1C: P2SQL SECURITY CHECKS (Prompt Injection Defense)
-
-        // 1C.2: Reject line comments (--) - check FIRST before other separators
-        if request.query.contains("--") {
+        // Phase 1C: P2SQL SECURITY CHECKS - Pattern matching approach
+        if let Some(error_message) = Self::check_security_patterns(&request.query) {
             return Ok(ValidationResponse {
                 valid: false,
-                error_message: "SQL line comment syntax (--) is not allowed".to_string(),
+                error_message,
             });
         }
 
-        // 1C.3: Reject block comments (/* */)
-        if request.query.contains("/*") || request.query.contains("*/") {
+        // Check for mutation keywords (read-only enforcement)
+        if let Some(error_message) = Self::check_mutation_keywords(&query_upper) {
             return Ok(ValidationResponse {
                 valid: false,
-                error_message: "SQL block comment syntax (/* */) is not allowed".to_string(),
-            });
-        }
-
-        // 1C.1: Reject command chaining (semicolons)
-        if request.query.contains(';') {
-            return Ok(ValidationResponse {
-                valid: false,
-                error_message: "Command chaining detected: semicolon is not allowed".to_string(),
-            });
-        }
-
-        // 1C.4: Reject PRAGMA statements
-        if query_upper.contains("PRAGMA") {
-            return Ok(ValidationResponse {
-                valid: false,
-                error_message: "PRAGMA statements are not allowed".to_string(),
-            });
-        }
-
-        // 1C.5: Reject EXPLAIN statements
-        if query_upper.starts_with("EXPLAIN") {
-            return Ok(ValidationResponse {
-                valid: false,
-                error_message: "EXPLAIN statements are not allowed".to_string(),
-            });
-        }
-
-        // 1C.6: Reject boolean-based injection patterns (OR '1'='1 or OR "1"="1)
-        if (query_upper.contains(" OR '") || query_upper.contains(" OR \""))
-            && (query_upper.contains("'1'='1") || query_upper.contains("\"1\"=\"1"))
-        {
-            return Ok(ValidationResponse {
-                valid: false,
-                error_message: "Suspected boolean-based SQL injection detected".to_string(),
-            });
-        }
-
-        // 1C.7: Reject UNION-based injection
-        if query_upper.contains("UNION") && query_upper.contains("SELECT") {
-            return Ok(ValidationResponse {
-                valid: false,
-                error_message: "UNION queries are not allowed - potential injection vector"
-                    .to_string(),
-            });
-        }
-
-        // 1C.8: Reject time-based blind injection (SLEEP, WAITFOR)
-        if query_upper.contains("SLEEP(") || query_upper.contains("WAITFOR") {
-            return Ok(ValidationResponse {
-                valid: false,
-                error_message: "SLEEP injection detected - time-based injection not allowed"
-                    .to_string(),
-            });
-        }
-
-        // 1C.9: Reject subquery injection in WHERE/FROM/SELECT
-        if request.query.contains("(SELECT") || request.query.contains("(select") {
-            return Ok(ValidationResponse {
-                valid: false,
-                error_message: "Subquery injection detected - embedded SELECT not allowed"
-                    .to_string(),
-            });
-        }
-
-        // 1C.10: Reject ATTACH/DETACH database manipulation
-        if query_upper.contains("ATTACH") || query_upper.contains("DETACH") {
-            return Ok(ValidationResponse {
-                valid: false,
-                error_message: "ATTACH/DETACH DATABASE statements are not allowed".to_string(),
-            });
-        }
-
-        // Phase 1B: Basic DDL/DML/Schema Validation (after P2SQL checks)
-
-        // Check for DDL/DML keywords (read-only enforcement)
-        if query_upper.contains("INSERT")
-            || query_upper.contains("UPDATE")
-            || query_upper.contains("DELETE")
-        {
-            return Ok(ValidationResponse {
-                valid: false,
-                error_message: "DML statements (INSERT, UPDATE, DELETE) are not allowed"
-                    .to_string(),
-            });
-        }
-
-        if query_upper.contains("CREATE")
-            || query_upper.contains("DROP")
-            || query_upper.contains("ALTER")
-        {
-            return Ok(ValidationResponse {
-                valid: false,
-                error_message: "DDL statements (CREATE, DROP, ALTER) are not allowed".to_string(),
+                error_message,
             });
         }
 
