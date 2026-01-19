@@ -55,7 +55,7 @@ impl SecurityPattern {
             SecurityPattern::Pragma if query_upper.contains("PRAGMA") => {
                 Some("PRAGMA statements are not allowed".to_string())
             }
-            SecurityPattern::Explain if query_upper.starts_with("EXPLAIN") => {
+            SecurityPattern::Explain if query_upper.trim_start().starts_with("EXPLAIN") => {
                 Some("EXPLAIN statements are not allowed".to_string())
             }
             SecurityPattern::BooleanInjection
@@ -74,9 +74,7 @@ impl SecurityPattern {
             {
                 Some("SLEEP injection detected - time-based injection not allowed".to_string())
             }
-            SecurityPattern::SubqueryInjection
-                if query.contains("(SELECT") || query.contains("(select") =>
-            {
+            SecurityPattern::SubqueryInjection if query_upper.contains("(SELECT") => {
                 Some("Subquery injection detected - embedded SELECT not allowed".to_string())
             }
             SecurityPattern::DatabaseManipulation
@@ -391,19 +389,42 @@ impl QueryService for QueryServiceImpl {
         let schema = introspect_sqlite_path(db_path)
             .map_err(|e| format!("Failed to introspect schema: {}", e))?;
 
-        // Extract and validate table name
-        let from_pos = query_upper.find("FROM").unwrap();
-        let after_from = &request.query[from_pos + 4..].trim_start();
-        let table_name = after_from
-            .split_whitespace()
-            .next()
-            .unwrap_or("")
+        // Extract and validate table name (robust to case, schema qualifiers, and quotes)
+        let from_pos = query_upper
+            .find("FROM")
+            .expect("FROM clause existence was checked above");
+        let after_from_upper = query_upper[from_pos + 4..].trim_start();
+        let raw_table_token_upper = after_from_upper.split_whitespace().next().unwrap_or("");
+
+        // Get the same token from the original query to preserve casing for error messages
+        let after_from_original = request.query[from_pos + 4..].trim_start();
+        let raw_table_token_original = after_from_original.split_whitespace().next().unwrap_or("");
+
+        // Normalize table token for schema matching:
+        // - strip trailing semicolons,
+        // - drop schema qualifier (take last segment after '.'),
+        // - remove surrounding quote-like characters.
+        let raw_token = raw_table_token_upper.trim_end_matches(';');
+        let last_segment = raw_token.rsplit('.').next().unwrap_or(raw_token);
+        let normalized_table_name = last_segment
+            .trim_matches(|c| c == '"' || c == '`' || c == '[' || c == ']')
             .to_string();
 
-        if !schema.tables.iter().any(|t| t.name == table_name) {
+        // Also preserve original casing for error messages
+        let original_token = raw_table_token_original.trim_end_matches(';');
+        let original_last_segment = original_token.rsplit('.').next().unwrap_or(original_token);
+        let display_table_name = original_last_segment
+            .trim_matches(|c| c == '"' || c == '`' || c == '[' || c == ']')
+            .to_string();
+
+        if !schema
+            .tables
+            .iter()
+            .any(|t| t.name.eq_ignore_ascii_case(&normalized_table_name))
+        {
             return Ok(ValidationResponse {
                 valid: false,
-                error_message: format!("Table '{}' does not exist in schema", table_name),
+                error_message: format!("Table '{}' does not exist in schema", display_table_name),
             });
         }
 
