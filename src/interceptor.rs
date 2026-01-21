@@ -41,6 +41,29 @@ pub enum Event {
         reason: String,
         timestamp: String,
     },
+    #[serde(rename = "QueryExecuted")]
+    QueryExecuted {
+        db_identifier: String,
+        query: String,
+        status: String,
+        row_count: i32,
+        execution_ms: i32,
+        timestamp: String,
+    },
+    #[serde(rename = "QueryValidationFailed")]
+    QueryValidationFailed {
+        db_identifier: String,
+        query: String,
+        error_reason: String,
+        timestamp: String,
+    },
+    #[serde(rename = "QueryExecutionError")]
+    QueryExecutionError {
+        db_identifier: String,
+        query: String,
+        error_message: String,
+        timestamp: String,
+    },
 }
 
 impl Event {
@@ -92,12 +115,64 @@ impl Event {
         }
     }
 
+    /// Query execution event constructor
+    pub fn query_executed(
+        db_identifier: String,
+        query: String,
+        status: String,
+        row_count: i32,
+        execution_ms: i32,
+        timestamp: String,
+    ) -> Self {
+        Event::QueryExecuted {
+            db_identifier,
+            query,
+            status,
+            row_count,
+            execution_ms,
+            timestamp,
+        }
+    }
+
+    /// Query validation failure event constructor
+    pub fn query_validation_failed(
+        db_identifier: String,
+        query: String,
+        error_reason: String,
+        timestamp: String,
+    ) -> Self {
+        Event::QueryValidationFailed {
+            db_identifier,
+            query,
+            error_reason,
+            timestamp,
+        }
+    }
+
+    /// Query execution error event constructor
+    pub fn query_execution_error(
+        db_identifier: String,
+        query: String,
+        error_message: String,
+        timestamp: String,
+    ) -> Self {
+        Event::QueryExecutionError {
+            db_identifier,
+            query,
+            error_message,
+            timestamp,
+        }
+    }
+
     /// Get the event type as a string
     pub fn event_type(&self) -> &str {
         match self {
             Event::StatusChange { .. } => "StatusChange",
             Event::ColumnChange { .. } => "ColumnChange",
             Event::ConstraintViolation { .. } => "ConstraintViolation",
+            Event::QueryExecuted { .. } => "QueryExecuted",
+            Event::QueryValidationFailed { .. } => "QueryValidationFailed",
+            Event::QueryExecutionError { .. } => "QueryExecutionError",
         }
     }
 
@@ -144,6 +219,43 @@ impl Event {
                 map.insert("entity_id".to_string(), entity_id.clone());
                 map.insert("constraint_name".to_string(), constraint_name.clone());
                 map.insert("reason".to_string(), reason.clone());
+                map.insert("timestamp".to_string(), timestamp.clone());
+            }
+            Event::QueryExecuted {
+                db_identifier,
+                query,
+                status,
+                row_count,
+                execution_ms,
+                timestamp,
+            } => {
+                map.insert("db_identifier".to_string(), db_identifier.clone());
+                map.insert("query".to_string(), query.clone());
+                map.insert("status".to_string(), status.clone());
+                map.insert("row_count".to_string(), row_count.to_string());
+                map.insert("execution_ms".to_string(), execution_ms.to_string());
+                map.insert("timestamp".to_string(), timestamp.clone());
+            }
+            Event::QueryValidationFailed {
+                db_identifier,
+                query,
+                error_reason,
+                timestamp,
+            } => {
+                map.insert("db_identifier".to_string(), db_identifier.clone());
+                map.insert("query".to_string(), query.clone());
+                map.insert("error_reason".to_string(), error_reason.clone());
+                map.insert("timestamp".to_string(), timestamp.clone());
+            }
+            Event::QueryExecutionError {
+                db_identifier,
+                query,
+                error_message,
+                timestamp,
+            } => {
+                map.insert("db_identifier".to_string(), db_identifier.clone());
+                map.insert("query".to_string(), query.clone());
+                map.insert("error_message".to_string(), error_message.clone());
                 map.insert("timestamp".to_string(), timestamp.clone());
             }
         }

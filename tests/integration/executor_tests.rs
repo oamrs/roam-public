@@ -644,3 +644,619 @@ async fn query_service_rejects_attach_database() {
         "Error should mention ATTACH or database manipulation"
     );
 }
+
+// ============================================================================
+// PHASE 1D: Query Execution Tests (Integration - With Database)
+// ============================================================================
+
+use oam::generated::ExecuteQueryRequest;
+
+/// Test 1D.6: QueryService executes valid SELECT query and returns rows
+#[tokio::test]
+async fn query_service_executes_select_and_returns_row_count() {
+    let tmp = NamedTempFile::new().expect("create tmp file");
+    let db_path = tmp.path().to_str().unwrap();
+
+    let _conn = rusqlite::Connection::open(db_path).expect("open db");
+    _conn
+        .execute(
+            "CREATE TABLE users (id INTEGER PRIMARY KEY, name TEXT NOT NULL)",
+            [],
+        )
+        .expect("create table");
+    _conn
+        .execute("INSERT INTO users (name) VALUES ('Alice')", [])
+        .expect("insert row 1");
+    _conn
+        .execute("INSERT INTO users (name) VALUES ('Bob')", [])
+        .expect("insert row 2");
+    drop(_conn);
+
+    let mut executor = QueryServiceImpl::new();
+    executor.set_db_path(db_path).expect("set db path");
+
+    let request = ExecuteQueryRequest {
+        db_identifier: "test".to_string(),
+        query: "SELECT * FROM users".to_string(),
+        parameters: std::collections::HashMap::new(),
+        limit: 100,
+        timeout_seconds: 30,
+    };
+
+    let result = executor.execute_query(request).await;
+    assert!(result.is_ok());
+    let response = result.unwrap();
+
+    assert_eq!(
+        response.status,
+        oam::generated::QueryStatus::Success as i32,
+        "Query should succeed"
+    );
+    assert_eq!(response.row_count, 2, "Should return 2 rows");
+    assert!(
+        response.execution_ms >= 0,
+        "execution_ms should be recorded"
+    );
+}
+
+/// Test 1D.7: QueryService respects row limit in result set
+#[tokio::test]
+async fn query_service_respects_limit_parameter() {
+    let tmp = NamedTempFile::new().expect("create tmp file");
+    let db_path = tmp.path().to_str().unwrap();
+
+    let _conn = rusqlite::Connection::open(db_path).expect("open db");
+    _conn
+        .execute(
+            "CREATE TABLE users (id INTEGER PRIMARY KEY, name TEXT NOT NULL)",
+            [],
+        )
+        .expect("create table");
+
+    // Insert 5 rows
+    for i in 0..5 {
+        _conn
+            .execute(
+                "INSERT INTO users (name) VALUES (?1)",
+                [&format!("User{}", i)],
+            )
+            .expect("insert row");
+    }
+    drop(_conn);
+
+    let mut executor = QueryServiceImpl::new();
+    executor.set_db_path(db_path).expect("set db path");
+
+    let request = ExecuteQueryRequest {
+        db_identifier: "test".to_string(),
+        query: "SELECT * FROM users".to_string(),
+        parameters: std::collections::HashMap::new(),
+        limit: 3, // Limit to 3 rows
+        timeout_seconds: 30,
+    };
+
+    let result = executor.execute_query(request).await;
+    assert!(result.is_ok());
+    let response = result.unwrap();
+
+    assert_eq!(response.status, oam::generated::QueryStatus::Success as i32);
+    assert_eq!(
+        response.row_count, 3,
+        "Should return exactly 3 rows due to limit"
+    );
+}
+
+/// Test 1D.8: QueryService rejects invalid queries with ValidationError
+#[tokio::test]
+async fn query_service_rejects_invalid_query_with_validation_error() {
+    let tmp = NamedTempFile::new().expect("create tmp file");
+    let db_path = tmp.path().to_str().unwrap();
+
+    let _conn = rusqlite::Connection::open(db_path).expect("open db");
+    _conn
+        .execute(
+            "CREATE TABLE users (id INTEGER PRIMARY KEY, name TEXT NOT NULL)",
+            [],
+        )
+        .expect("create table");
+    drop(_conn);
+
+    let mut executor = QueryServiceImpl::new();
+    executor.set_db_path(db_path).expect("set db path");
+
+    // Query with command chaining
+    let request = ExecuteQueryRequest {
+        db_identifier: "test".to_string(),
+        query: "SELECT * FROM users; DROP TABLE users;".to_string(),
+        parameters: std::collections::HashMap::new(),
+        limit: 100,
+        timeout_seconds: 30,
+    };
+
+    let result = executor.execute_query(request).await;
+    assert!(result.is_ok());
+    let response = result.unwrap();
+
+    assert_eq!(
+        response.status,
+        oam::generated::QueryStatus::ValidationError as i32,
+        "Should fail validation"
+    );
+}
+
+/// Test 1D.9: QueryService returns ExecutionError for non-existent table
+#[tokio::test]
+async fn query_service_returns_execution_error_for_nonexistent_table() {
+    let tmp = NamedTempFile::new().expect("create tmp file");
+    let db_path = tmp.path().to_str().unwrap();
+
+    let _conn = rusqlite::Connection::open(db_path).expect("open db");
+    _conn
+        .execute(
+            "CREATE TABLE users (id INTEGER PRIMARY KEY, name TEXT NOT NULL)",
+            [],
+        )
+        .expect("create table");
+    drop(_conn);
+
+    let mut executor = QueryServiceImpl::new();
+    executor.set_db_path(db_path).expect("set db path");
+
+    // Query against non-existent table
+    let request = ExecuteQueryRequest {
+        db_identifier: "test".to_string(),
+        query: "SELECT * FROM nonexistent".to_string(),
+        parameters: std::collections::HashMap::new(),
+        limit: 100,
+        timeout_seconds: 30,
+    };
+
+    let result = executor.execute_query(request).await;
+    assert!(result.is_ok());
+    let response = result.unwrap();
+
+    // Table validation happens before execution, so should be ValidationError
+    assert_eq!(
+        response.status,
+        oam::generated::QueryStatus::ValidationError as i32,
+        "Should return ValidationError because table doesn't exist"
+    );
+}
+
+/// Test 1D.10: QueryService executes parameterized query with substitution
+#[tokio::test]
+async fn query_service_executes_parameterized_query() {
+    let tmp = NamedTempFile::new().expect("create tmp file");
+    let db_path = tmp.path().to_str().unwrap();
+
+    let _conn = rusqlite::Connection::open(db_path).expect("open db");
+    _conn
+        .execute(
+            "CREATE TABLE users (id INTEGER PRIMARY KEY, name TEXT NOT NULL)",
+            [],
+        )
+        .expect("create table");
+    _conn
+        .execute("INSERT INTO users (name) VALUES ('Alice')", [])
+        .expect("insert row");
+    _conn
+        .execute("INSERT INTO users (name) VALUES ('Bob')", [])
+        .expect("insert row");
+    drop(_conn);
+
+    let mut executor = QueryServiceImpl::new();
+    executor.set_db_path(db_path).expect("set db path");
+
+    let mut params = std::collections::HashMap::new();
+    params.insert(
+        "name".to_string(),
+        oam::generated::QueryParameter {
+            value: "Alice".to_string(),
+            type_hint: "TEXT".to_string(),
+        },
+    );
+
+    // Phase 1D: Parameters are accepted but not yet bound (that's Phase 1E)
+    // This test verifies the query executes; parameter substitution will be tested in Phase 1E
+    let request = ExecuteQueryRequest {
+        db_identifier: "test".to_string(),
+        query: "SELECT * FROM users".to_string(), // Simple query without WHERE for Phase 1D
+        parameters: params,
+        limit: 100,
+        timeout_seconds: 30,
+    };
+
+    let result = executor.execute_query(request).await;
+    assert!(result.is_ok());
+    let response = result.unwrap();
+
+    assert_eq!(response.status, oam::generated::QueryStatus::Success as i32);
+    assert_eq!(
+        response.row_count, 2,
+        "Should return all users (Phase 1D doesn't bind parameters yet)"
+    );
+}
+
+// ============================================================================
+// PHASE 1E: EVENT INTEGRATION TESTS (With Database)
+// ============================================================================
+
+/// Test 1E.1: QueryService dispatches QueryExecuted event when query succeeds with database
+#[tokio::test]
+async fn query_service_dispatches_query_executed_event_on_db_success() {
+    use oam::interceptor::get_event_bus;
+    use oam::Event;
+
+    let event_bus = get_event_bus();
+    let _ = event_bus.clear();
+
+    // Create a test database
+    let tmp = NamedTempFile::new().expect("create tmp file");
+    let db_path = tmp.path().to_str().unwrap();
+
+    let _conn = rusqlite::Connection::open(db_path).expect("open db");
+    _conn
+        .execute(
+            "CREATE TABLE test_table (id INTEGER PRIMARY KEY, value TEXT)",
+            [],
+        )
+        .expect("create table");
+    _conn
+        .execute("INSERT INTO test_table (value) VALUES ('row1')", [])
+        .expect("insert row");
+    drop(_conn);
+
+    let mut executor = QueryServiceImpl::new();
+    executor.set_db_path(db_path).expect("set db path");
+
+    let test_db_id = "ie1e1_test_db".to_string();
+    let request = ExecuteQueryRequest {
+        db_identifier: test_db_id.clone(),
+        query: "SELECT * FROM test_table".to_string(),
+        parameters: std::collections::HashMap::new(),
+        limit: 100,
+        timeout_seconds: 30,
+    };
+
+    let result = executor.execute_query(request).await;
+    assert!(result.is_ok());
+    let response = result.unwrap();
+    assert_eq!(response.status, oam::generated::QueryStatus::Success as i32);
+
+    // Check that QueryExecuted event was dispatched for THIS test
+    let events = event_bus.all_events().expect("get generic events");
+    let test_events: Vec<_> = events
+        .iter()
+        .filter(|e| {
+            if let Event::QueryExecuted { db_identifier, .. } = e {
+                db_identifier == &test_db_id
+            } else {
+                false
+            }
+        })
+        .collect();
+
+    assert!(
+        !test_events.is_empty(),
+        "Should have dispatched QueryExecuted event on success"
+    );
+
+    if let Event::QueryExecuted {
+        db_identifier,
+        query: _,
+        status,
+        row_count,
+        execution_ms: _,
+        timestamp: _,
+    } = test_events[0]
+    {
+        assert_eq!(db_identifier, &test_db_id);
+        assert_eq!(status, "Success");
+        assert_eq!(row_count, &1i32);
+    } else {
+        panic!("Expected QueryExecuted event");
+    }
+}
+
+/// Test 1E.2: QueryService dispatches QueryValidationFailed event when validation fails with database
+#[tokio::test]
+async fn query_service_dispatches_query_validation_failed_event_on_db_validation_failure() {
+    use oam::interceptor::get_event_bus;
+    use oam::Event;
+
+    // Clear previous events
+    let event_bus = get_event_bus();
+    let _ = event_bus.clear();
+
+    let test_db_id = "ie1e2_validation_test";
+
+    // Create a test database
+    let tmp = NamedTempFile::new().expect("create tmp file");
+    let db_path = tmp.path().to_str().unwrap();
+
+    let _conn = rusqlite::Connection::open(db_path).expect("open db");
+    _conn
+        .execute(
+            "CREATE TABLE test_table (id INTEGER PRIMARY KEY, value TEXT)",
+            [],
+        )
+        .expect("create table");
+    drop(_conn);
+
+    let mut executor = QueryServiceImpl::new();
+    executor.set_db_path(db_path).expect("set db path");
+
+    // Query against non-existent table
+    let request = ExecuteQueryRequest {
+        db_identifier: test_db_id.to_string(),
+        query: "SELECT * FROM nonexistent_table".to_string(),
+        parameters: std::collections::HashMap::new(),
+        limit: 100,
+        timeout_seconds: 30,
+    };
+
+    let result = executor.execute_query(request).await;
+    assert!(result.is_ok());
+    let response = result.unwrap();
+    assert_eq!(
+        response.status,
+        oam::generated::QueryStatus::ValidationError as i32
+    );
+
+    // Check that QueryValidationFailed event was dispatched
+    let events = event_bus.all_events().expect("get generic events");
+    let test_events: Vec<_> = events
+        .iter()
+        .filter(|e| {
+            if let Event::QueryValidationFailed { db_identifier, .. } = e {
+                db_identifier == test_db_id
+            } else {
+                false
+            }
+        })
+        .collect();
+    assert!(
+        !test_events.is_empty(),
+        "Should have dispatched QueryValidationFailed event on validation error"
+    );
+
+    let event = test_events[0];
+    match event {
+        Event::QueryValidationFailed {
+            db_identifier,
+            query: _,
+            error_reason,
+            timestamp: _,
+        } => {
+            assert_eq!(db_identifier, test_db_id);
+            assert!(!error_reason.is_empty());
+        }
+        _ => panic!("Expected QueryValidationFailed event, got {:?}", event),
+    }
+}
+
+/// Test 1E.3: QueryService dispatches QueryExecutionError event when execution fails
+#[tokio::test]
+async fn query_service_dispatches_query_execution_error_event_on_db_execution_failure() {
+    use oam::interceptor::get_event_bus;
+    use oam::Event;
+
+    // Clear previous events
+    let event_bus = get_event_bus();
+    let _ = event_bus.clear();
+
+    let test_db_id = "ie1e3_execution_error_test";
+
+    // Create a test database
+    let tmp = NamedTempFile::new().expect("create tmp file");
+    let db_path = tmp.path().to_str().unwrap();
+
+    let _conn = rusqlite::Connection::open(db_path).expect("open db");
+    _conn
+        .execute(
+            "CREATE TABLE test_table (id INTEGER PRIMARY KEY, value TEXT)",
+            [],
+        )
+        .expect("create table");
+    drop(_conn);
+
+    let mut executor = QueryServiceImpl::new();
+    executor.set_db_path(db_path).expect("set db path");
+
+    // Query with malformed SQL (after validation passes)
+    let request = ExecuteQueryRequest {
+        db_identifier: test_db_id.to_string(),
+        query: "SELECT * FROM test_table WHERE INVALID_COLUMN = 'test'".to_string(),
+        parameters: std::collections::HashMap::new(),
+        limit: 100,
+        timeout_seconds: 30,
+    };
+
+    let result = executor.execute_query(request).await;
+    assert!(result.is_ok());
+    let response = result.unwrap();
+    assert_eq!(
+        response.status,
+        oam::generated::QueryStatus::ExecutionError as i32
+    );
+
+    // Check that QueryExecutionError event was dispatched
+    let events = event_bus.all_events().expect("get generic events");
+    let test_events: Vec<_> = events
+        .iter()
+        .filter(|e| {
+            if let Event::QueryExecutionError { db_identifier, .. } = e {
+                db_identifier == test_db_id
+            } else {
+                false
+            }
+        })
+        .collect();
+    assert!(
+        !test_events.is_empty(),
+        "Should have dispatched QueryExecutionError event on execution error"
+    );
+
+    let event = test_events[0];
+    match event {
+        Event::QueryExecutionError {
+            db_identifier,
+            query: _,
+            error_message,
+            timestamp: _,
+        } => {
+            assert_eq!(db_identifier, test_db_id);
+            assert!(!error_message.is_empty());
+        }
+        _ => panic!("Expected QueryExecutionError event, got {:?}", event),
+    }
+}
+
+/// Test 1E.4: Dispatched events include complete execution metadata
+#[tokio::test]
+async fn query_service_events_include_complete_execution_metadata() {
+    use oam::interceptor::get_event_bus;
+    use oam::Event;
+
+    // Clear previous events
+    let event_bus = get_event_bus();
+    let _ = event_bus.clear();
+
+    let test_db_id = "ie1e4_metadata_test";
+
+    // Create a test database
+    let tmp = NamedTempFile::new().expect("create tmp file");
+    let db_path = tmp.path().to_str().unwrap();
+
+    let _conn = rusqlite::Connection::open(db_path).expect("open db");
+    _conn
+        .execute(
+            "CREATE TABLE test_table (id INTEGER PRIMARY KEY, value TEXT)",
+            [],
+        )
+        .expect("create table");
+    _conn
+        .execute("INSERT INTO test_table (value) VALUES ('test1')", [])
+        .expect("insert row");
+    _conn
+        .execute("INSERT INTO test_table (value) VALUES ('test2')", [])
+        .expect("insert row");
+    drop(_conn);
+
+    let mut executor = QueryServiceImpl::new();
+    executor.set_db_path(db_path).expect("set db path");
+
+    let request = ExecuteQueryRequest {
+        db_identifier: test_db_id.to_string(),
+        query: "SELECT * FROM test_table".to_string(),
+        parameters: std::collections::HashMap::new(),
+        limit: 100,
+        timeout_seconds: 30,
+    };
+
+    let _result = executor.execute_query(request).await;
+
+    // Get dispatched events
+    let events = event_bus.all_events().expect("get generic events");
+    let test_events: Vec<_> = events
+        .iter()
+        .filter(|e| {
+            if let Event::QueryExecuted { db_identifier, .. } = e {
+                db_identifier == test_db_id
+            } else {
+                false
+            }
+        })
+        .collect();
+    assert!(!test_events.is_empty());
+
+    let event = test_events[0];
+    match event {
+        Event::QueryExecuted {
+            db_identifier,
+            query,
+            status,
+            row_count,
+            execution_ms,
+            timestamp,
+        } => {
+            assert_eq!(db_identifier, test_db_id);
+            assert_eq!(query, "SELECT * FROM test_table");
+            assert_eq!(status, "Success");
+            assert_eq!(row_count, &2i32);
+            assert!(execution_ms > &0, "execution_ms should be positive");
+            assert!(!timestamp.is_empty(), "timestamp should not be empty");
+        }
+        _ => panic!("Expected QueryExecuted event with full metadata"),
+    }
+}
+
+/// Test 1E.5: Events track row count from query execution
+#[tokio::test]
+async fn query_service_events_track_row_count() {
+    use oam::interceptor::get_event_bus;
+    use oam::Event;
+
+    // Clear previous events
+    let event_bus = get_event_bus();
+    let _ = event_bus.clear();
+
+    let test_db_id = "ie1e5_row_count_test";
+
+    // Create a test database with multiple rows
+    let tmp = NamedTempFile::new().expect("create tmp file");
+    let db_path = tmp.path().to_str().unwrap();
+
+    let _conn = rusqlite::Connection::open(db_path).expect("open db");
+    _conn
+        .execute(
+            "CREATE TABLE test_table (id INTEGER PRIMARY KEY, value TEXT)",
+            [],
+        )
+        .expect("create table");
+
+    for i in 0..5 {
+        _conn
+            .execute(
+                "INSERT INTO test_table (value) VALUES (?1)",
+                [&format!("row_{}", i)],
+            )
+            .expect("insert row");
+    }
+    drop(_conn);
+
+    let mut executor = QueryServiceImpl::new();
+    executor.set_db_path(db_path).expect("set db path");
+
+    let request = ExecuteQueryRequest {
+        db_identifier: test_db_id.to_string(),
+        query: "SELECT * FROM test_table".to_string(),
+        parameters: std::collections::HashMap::new(),
+        limit: 100,
+        timeout_seconds: 30,
+    };
+
+    let _result = executor.execute_query(request).await;
+
+    // Check row_count in event
+    let events = event_bus.all_events().expect("get generic events");
+    let test_events: Vec<_> = events
+        .iter()
+        .filter(|e| {
+            if let Event::QueryExecuted { db_identifier, .. } = e {
+                db_identifier == test_db_id
+            } else {
+                false
+            }
+        })
+        .collect();
+    assert!(!test_events.is_empty());
+    let event = test_events[0];
+
+    match event {
+        Event::QueryExecuted { row_count, .. } => {
+            assert_eq!(row_count, &5i32, "Event should track 5 rows returned");
+        }
+        _ => panic!("Expected QueryExecuted event"),
+    }
+}

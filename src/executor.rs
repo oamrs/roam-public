@@ -437,14 +437,217 @@ impl QueryService for QueryServiceImpl {
 
     async fn execute_query(
         &self,
-        _request: ExecuteQueryRequest,
+        request: ExecuteQueryRequest,
     ) -> Result<ExecuteQueryResponse, String> {
-        // Phase 1A/1B/1C: Placeholder - actual execution in Phase 1D
-        Ok(ExecuteQueryResponse {
-            status: QueryStatus::ExecutionError as i32,
-            row_count: 0,
-            execution_ms: 0,
-            error_message: "Query execution not yet implemented".to_string(),
-        })
+        use crate::interceptor::{get_event_bus, Event};
+        use chrono::Utc;
+
+        let start_time = std::time::Instant::now();
+
+        // Phase 1D: Check basic security patterns first, even without db_path
+        // These patterns indicate injection attempts and should fail immediately
+        let query_upper = request.query.to_uppercase();
+
+        if let Some(error_message) = Self::check_security_patterns(&request.query) {
+            let execution_ms = start_time.elapsed().as_millis() as i32;
+            // Phase 1E: Dispatch QueryValidationFailed event
+            let timestamp = Utc::now().to_rfc3339();
+            let event = Event::query_validation_failed(
+                request.db_identifier.clone(),
+                request.query.clone(),
+                error_message.clone(),
+                timestamp,
+            );
+            let _ = get_event_bus().dispatch_generic(&event);
+
+            return Ok(ExecuteQueryResponse {
+                status: QueryStatus::ValidationError as i32,
+                row_count: 0,
+                execution_ms,
+                error_message,
+            });
+        }
+
+        if let Some(error_message) = Self::check_mutation_keywords(&query_upper) {
+            let execution_ms = start_time.elapsed().as_millis() as i32;
+            // Phase 1E: Dispatch QueryValidationFailed event
+            let timestamp = Utc::now().to_rfc3339();
+            let event = Event::query_validation_failed(
+                request.db_identifier.clone(),
+                request.query.clone(),
+                error_message.clone(),
+                timestamp,
+            );
+            let _ = get_event_bus().dispatch_generic(&event);
+
+            return Ok(ExecuteQueryResponse {
+                status: QueryStatus::ValidationError as i32,
+                row_count: 0,
+                execution_ms,
+                error_message,
+            });
+        }
+
+        // Now validate query (requires db_path for full validation)
+        let db_path = match &self.db_path {
+            Some(path) => path,
+            None => {
+                let execution_ms = start_time.elapsed().as_millis() as i32;
+                // Phase 1E: Dispatch QueryExecutionError event
+                let timestamp = Utc::now().to_rfc3339();
+                let error_message = "Database path not configured".to_string();
+                let event = Event::query_execution_error(
+                    request.db_identifier.clone(),
+                    request.query.clone(),
+                    error_message.clone(),
+                    timestamp,
+                );
+                let _ = get_event_bus().dispatch_generic(&event);
+
+                return Ok(ExecuteQueryResponse {
+                    status: QueryStatus::ExecutionError as i32,
+                    row_count: 0,
+                    execution_ms,
+                    error_message,
+                });
+            }
+        };
+
+        // Step 1: Full validation including schema checks
+        let validate_request = ValidateQueryRequest {
+            db_identifier: request.db_identifier.clone(),
+            query: request.query.clone(),
+            parameters: request.parameters.clone(),
+        };
+
+        let validation_result = self.validate_query(validate_request).await?;
+        if !validation_result.valid {
+            let execution_ms = start_time.elapsed().as_millis() as i32;
+            // Phase 1E: Dispatch QueryValidationFailed event
+            let timestamp = Utc::now().to_rfc3339();
+            let event = Event::query_validation_failed(
+                request.db_identifier.clone(),
+                request.query.clone(),
+                validation_result.error_message.clone(),
+                timestamp,
+            );
+            let _ = get_event_bus().dispatch_generic(&event);
+
+            return Ok(ExecuteQueryResponse {
+                status: QueryStatus::ValidationError as i32,
+                row_count: 0,
+                execution_ms,
+                error_message: validation_result.error_message,
+            });
+        }
+
+        // Step 2: Execute query against database
+        let execution_result = execute_query_on_database(
+            db_path,
+            &request.query,
+            request.limit,
+            request.timeout_seconds,
+        );
+
+        let execution_ms = start_time.elapsed().as_millis() as i32;
+        let timestamp = Utc::now().to_rfc3339();
+
+        match execution_result {
+            Ok(row_count) => {
+                // Phase 1E: Dispatch QueryExecuted event on success
+                let event = Event::query_executed(
+                    request.db_identifier.clone(),
+                    request.query.clone(),
+                    "Success".to_string(),
+                    row_count as i32,
+                    execution_ms,
+                    timestamp,
+                );
+                let _ = get_event_bus().dispatch_generic(&event);
+
+                Ok(ExecuteQueryResponse {
+                    status: QueryStatus::Success as i32,
+                    row_count: row_count as i32,
+                    execution_ms,
+                    error_message: String::new(),
+                })
+            }
+            Err(e) => {
+                // Check if it's a timeout
+                if e.to_lowercase().contains("timeout") {
+                    Ok(ExecuteQueryResponse {
+                        status: QueryStatus::Timeout as i32,
+                        row_count: 0,
+                        execution_ms,
+                        error_message: e,
+                    })
+                } else {
+                    // Phase 1E: Dispatch QueryExecutionError event
+                    let event = Event::query_execution_error(
+                        request.db_identifier.clone(),
+                        request.query.clone(),
+                        e.clone(),
+                        timestamp,
+                    );
+                    let _ = get_event_bus().dispatch_generic(&event);
+
+                    Ok(ExecuteQueryResponse {
+                        status: QueryStatus::ExecutionError as i32,
+                        row_count: 0,
+                        execution_ms,
+                        error_message: e,
+                    })
+                }
+            }
+        }
     }
+}
+
+/// Helper function to execute query on database
+/// Phase 1D: Basic query execution with row counting and limit support
+fn execute_query_on_database(
+    db_path: &str,
+    query: &str,
+    limit: i32,
+    timeout_seconds: i32,
+) -> Result<i64, String> {
+    use rusqlite::Connection;
+
+    // Open database connection
+    let conn = Connection::open(db_path).map_err(|e| format!("Failed to open database: {}", e))?;
+
+    // Set timeout
+    if timeout_seconds > 0 {
+        conn.busy_timeout(std::time::Duration::from_secs(timeout_seconds as u64))
+            .map_err(|e| format!("Failed to set timeout: {}", e))?;
+    }
+
+    // Prepare statement
+    let mut stmt = conn
+        .prepare(query)
+        .map_err(|e| format!("Failed to prepare query: {}", e))?;
+
+    // Execute query and count rows
+    let mut row_count = 0i64;
+    let limit_i64 = limit as i64;
+
+    // Use query_map which gives us an iterator
+    let rows = stmt
+        .query_map([], |_row| Ok(()))
+        .map_err(|e| format!("Query execution failed: {}", e))?;
+
+    for result in rows {
+        match result {
+            Ok(_) => {
+                row_count += 1;
+                // Check limit
+                if limit > 0 && row_count >= limit_i64 {
+                    break;
+                }
+            }
+            Err(e) => return Err(format!("Query execution failed: {}", e)),
+        }
+    }
+
+    Ok(row_count)
 }
