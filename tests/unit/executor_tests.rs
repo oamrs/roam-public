@@ -182,7 +182,7 @@ async fn query_service_returns_valid_status_codes() {
     let response = service.execute_query(request).await.unwrap();
 
     // Status code should be one of the valid QueryStatus values
-    let valid_status_codes = vec![
+    let valid_status_codes = [
         QueryStatus::Unspecified as i32,
         QueryStatus::Success as i32,
         QueryStatus::ValidationError as i32,

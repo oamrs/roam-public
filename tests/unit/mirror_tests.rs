@@ -277,7 +277,7 @@ fn sqlite_detects_enum_via_check_constraint() {
         .expect("role column exists");
 
     assert_eq!(
-        role_col.enum_values.as_ref().map(|v| v.as_slice()),
+        role_col.enum_values.as_deref(),
         Some(
             &[
                 "admin".to_string(),
@@ -317,10 +317,7 @@ fn sqlite_detects_enum_via_check_constraint_err_case() {
         .find(|c| c.name == "role")
         .expect("role column exists");
 
-    let has_invalid_enums = role_col
-        .enum_values
-        .as_ref()
-        .map_or(false, |v| !v.is_empty());
+    let has_invalid_enums = role_col.enum_values.as_ref().is_some_and(|v| !v.is_empty());
     assert!(
         !has_invalid_enums,
         "expected no enum values, got: {:?}",

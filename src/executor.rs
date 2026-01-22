@@ -331,6 +331,140 @@ impl QueryServiceImpl {
             .iter()
             .find_map(|pattern| pattern.check(query_upper))
     }
+
+    /// Build validation error response with event dispatch
+    async fn build_validation_error_response(
+        &self,
+        request: &ExecuteQueryRequest,
+        error_message: String,
+        start_time: std::time::Instant,
+    ) -> Result<ExecuteQueryResponse, String> {
+        use crate::interceptor::{get_event_bus, Event};
+        use chrono::Utc;
+
+        let execution_ms = start_time.elapsed().as_millis() as i32;
+        let timestamp = Utc::now().to_rfc3339();
+
+        let event = Event::query_validation_failed(
+            request.db_identifier.clone(),
+            request.query.clone(),
+            error_message.clone(),
+            timestamp,
+        );
+        let _ = get_event_bus().dispatch_generic(&event);
+
+        Ok(ExecuteQueryResponse {
+            status: QueryStatus::ValidationError as i32,
+            row_count: 0,
+            execution_ms,
+            error_message,
+        })
+    }
+
+    /// Build execution error response with event dispatch
+    async fn build_execution_error_response(
+        &self,
+        request: &ExecuteQueryRequest,
+        error_message: String,
+        start_time: std::time::Instant,
+    ) -> Result<ExecuteQueryResponse, String> {
+        use crate::interceptor::{get_event_bus, Event};
+        use chrono::Utc;
+
+        let execution_ms = start_time.elapsed().as_millis() as i32;
+        let timestamp = Utc::now().to_rfc3339();
+
+        let event = Event::query_execution_error(
+            request.db_identifier.clone(),
+            request.query.clone(),
+            error_message.clone(),
+            timestamp,
+        );
+        let _ = get_event_bus().dispatch_generic(&event);
+
+        Ok(ExecuteQueryResponse {
+            status: QueryStatus::ExecutionError as i32,
+            row_count: 0,
+            execution_ms,
+            error_message,
+        })
+    }
+
+    /// Build execution response handling success and error cases
+    async fn build_execution_response(
+        &self,
+        request: &ExecuteQueryRequest,
+        execution_result: Result<i64, String>,
+        start_time: std::time::Instant,
+    ) -> Result<ExecuteQueryResponse, String> {
+        use crate::interceptor::{get_event_bus, Event};
+        use chrono::Utc;
+
+        let execution_ms = start_time.elapsed().as_millis() as i32;
+        let timestamp = Utc::now().to_rfc3339();
+
+        match execution_result {
+            Ok(row_count) => {
+                // Phase 1E: Dispatch QueryExecuted event on success
+                let event = Event::query_executed(
+                    request.db_identifier.clone(),
+                    request.query.clone(),
+                    "Success".to_string(),
+                    row_count as i32,
+                    execution_ms,
+                    timestamp,
+                );
+                let _ = get_event_bus().dispatch_generic(&event);
+
+                Ok(ExecuteQueryResponse {
+                    status: QueryStatus::Success as i32,
+                    row_count: row_count as i32,
+                    execution_ms,
+                    error_message: String::new(),
+                })
+            }
+            Err(e) => {
+                self.handle_execution_error(request.clone(), e, execution_ms, timestamp)
+                    .await
+            }
+        }
+    }
+
+    /// Handle execution errors, distinguishing between timeout and other errors
+    async fn handle_execution_error(
+        &self,
+        request: ExecuteQueryRequest,
+        error: String,
+        execution_ms: i32,
+        timestamp: String,
+    ) -> Result<ExecuteQueryResponse, String> {
+        use crate::interceptor::{get_event_bus, Event};
+
+        if error.to_lowercase().contains("timeout") {
+            return Ok(ExecuteQueryResponse {
+                status: QueryStatus::Timeout as i32,
+                row_count: 0,
+                execution_ms,
+                error_message: error,
+            });
+        }
+
+        // Phase 1E: Dispatch QueryExecutionError event
+        let event = Event::query_execution_error(
+            request.db_identifier.clone(),
+            request.query.clone(),
+            error.clone(),
+            timestamp,
+        );
+        let _ = get_event_bus().dispatch_generic(&event);
+
+        Ok(ExecuteQueryResponse {
+            status: QueryStatus::ExecutionError as i32,
+            row_count: 0,
+            execution_ms,
+            error_message: error,
+        })
+    }
 }
 
 impl Default for QueryServiceImpl {
@@ -439,109 +573,54 @@ impl QueryService for QueryServiceImpl {
         &self,
         request: ExecuteQueryRequest,
     ) -> Result<ExecuteQueryResponse, String> {
-        use crate::interceptor::{get_event_bus, Event};
-        use chrono::Utc;
-
         let start_time = std::time::Instant::now();
 
-        // Phase 1D: Check basic security patterns first, even without db_path
-        // These patterns indicate injection attempts and should fail immediately
+        // Phase 1D: Check basic security patterns first
+        if let Some(error_msg) = Self::check_security_patterns(&request.query) {
+            return self
+                .build_validation_error_response(&request, error_msg, start_time)
+                .await;
+        }
+
+        // Check mutation keywords
         let query_upper = request.query.to_uppercase();
-
-        if let Some(error_message) = Self::check_security_patterns(&request.query) {
-            let execution_ms = start_time.elapsed().as_millis() as i32;
-            // Phase 1E: Dispatch QueryValidationFailed event
-            let timestamp = Utc::now().to_rfc3339();
-            let event = Event::query_validation_failed(
-                request.db_identifier.clone(),
-                request.query.clone(),
-                error_message.clone(),
-                timestamp,
-            );
-            let _ = get_event_bus().dispatch_generic(&event);
-
-            return Ok(ExecuteQueryResponse {
-                status: QueryStatus::ValidationError as i32,
-                row_count: 0,
-                execution_ms,
-                error_message,
-            });
+        if let Some(error_msg) = Self::check_mutation_keywords(&query_upper) {
+            return self
+                .build_validation_error_response(&request, error_msg, start_time)
+                .await;
         }
 
-        if let Some(error_message) = Self::check_mutation_keywords(&query_upper) {
-            let execution_ms = start_time.elapsed().as_millis() as i32;
-            // Phase 1E: Dispatch QueryValidationFailed event
-            let timestamp = Utc::now().to_rfc3339();
-            let event = Event::query_validation_failed(
-                request.db_identifier.clone(),
-                request.query.clone(),
-                error_message.clone(),
-                timestamp,
-            );
-            let _ = get_event_bus().dispatch_generic(&event);
-
-            return Ok(ExecuteQueryResponse {
-                status: QueryStatus::ValidationError as i32,
-                row_count: 0,
-                execution_ms,
-                error_message,
-            });
-        }
-
-        // Now validate query (requires db_path for full validation)
+        // Get database path or return error
         let db_path = match &self.db_path {
             Some(path) => path,
             None => {
-                let execution_ms = start_time.elapsed().as_millis() as i32;
-                // Phase 1E: Dispatch QueryExecutionError event
-                let timestamp = Utc::now().to_rfc3339();
-                let error_message = "Database path not configured".to_string();
-                let event = Event::query_execution_error(
-                    request.db_identifier.clone(),
-                    request.query.clone(),
-                    error_message.clone(),
-                    timestamp,
-                );
-                let _ = get_event_bus().dispatch_generic(&event);
-
-                return Ok(ExecuteQueryResponse {
-                    status: QueryStatus::ExecutionError as i32,
-                    row_count: 0,
-                    execution_ms,
-                    error_message,
-                });
+                let error_msg = "Database path not configured".to_string();
+                return self
+                    .build_execution_error_response(&request, error_msg, start_time)
+                    .await;
             }
         };
 
-        // Step 1: Full validation including schema checks
-        let validate_request = ValidateQueryRequest {
-            db_identifier: request.db_identifier.clone(),
-            query: request.query.clone(),
-            parameters: request.parameters.clone(),
-        };
+        // Full validation including schema checks
+        let validation_result = self
+            .validate_query(ValidateQueryRequest {
+                db_identifier: request.db_identifier.clone(),
+                query: request.query.clone(),
+                parameters: request.parameters.clone(),
+            })
+            .await?;
 
-        let validation_result = self.validate_query(validate_request).await?;
         if !validation_result.valid {
-            let execution_ms = start_time.elapsed().as_millis() as i32;
-            // Phase 1E: Dispatch QueryValidationFailed event
-            let timestamp = Utc::now().to_rfc3339();
-            let event = Event::query_validation_failed(
-                request.db_identifier.clone(),
-                request.query.clone(),
-                validation_result.error_message.clone(),
-                timestamp,
-            );
-            let _ = get_event_bus().dispatch_generic(&event);
-
-            return Ok(ExecuteQueryResponse {
-                status: QueryStatus::ValidationError as i32,
-                row_count: 0,
-                execution_ms,
-                error_message: validation_result.error_message,
-            });
+            return self
+                .build_validation_error_response(
+                    &request,
+                    validation_result.error_message,
+                    start_time,
+                )
+                .await;
         }
 
-        // Step 2: Execute query against database
+        // Execute query
         let execution_result = execute_query_on_database(
             db_path,
             &request.query,
@@ -549,57 +628,8 @@ impl QueryService for QueryServiceImpl {
             request.timeout_seconds,
         );
 
-        let execution_ms = start_time.elapsed().as_millis() as i32;
-        let timestamp = Utc::now().to_rfc3339();
-
-        match execution_result {
-            Ok(row_count) => {
-                // Phase 1E: Dispatch QueryExecuted event on success
-                let event = Event::query_executed(
-                    request.db_identifier.clone(),
-                    request.query.clone(),
-                    "Success".to_string(),
-                    row_count as i32,
-                    execution_ms,
-                    timestamp,
-                );
-                let _ = get_event_bus().dispatch_generic(&event);
-
-                Ok(ExecuteQueryResponse {
-                    status: QueryStatus::Success as i32,
-                    row_count: row_count as i32,
-                    execution_ms,
-                    error_message: String::new(),
-                })
-            }
-            Err(e) => {
-                // Check if it's a timeout
-                if e.to_lowercase().contains("timeout") {
-                    Ok(ExecuteQueryResponse {
-                        status: QueryStatus::Timeout as i32,
-                        row_count: 0,
-                        execution_ms,
-                        error_message: e,
-                    })
-                } else {
-                    // Phase 1E: Dispatch QueryExecutionError event
-                    let event = Event::query_execution_error(
-                        request.db_identifier.clone(),
-                        request.query.clone(),
-                        e.clone(),
-                        timestamp,
-                    );
-                    let _ = get_event_bus().dispatch_generic(&event);
-
-                    Ok(ExecuteQueryResponse {
-                        status: QueryStatus::ExecutionError as i32,
-                        row_count: 0,
-                        execution_ms,
-                        error_message: e,
-                    })
-                }
-            }
-        }
+        self.build_execution_response(&request, execution_result, start_time)
+            .await
     }
 }
 
