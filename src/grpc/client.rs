@@ -98,17 +98,15 @@ impl GrpcClient {
             .await
             .map_err(|_| "Failed to send request".to_string())?;
 
-        let mut buffer = vec![0; 4096];
-        let n = stream
-            .read(&mut buffer)
+        let mut buffer = Vec::new();
+        stream
+            .read_to_end(&mut buffer)
             .await
             .map_err(|_| "Failed to read response".to_string())?;
-
-        if n == 0 {
+        if buffer.is_empty() {
             return Err("Failed to read response".to_string());
         }
-
-        let response_str = String::from_utf8_lossy(&buffer[..n]);
+        let response_str = String::from_utf8_lossy(&buffer);
         serde_json::from_str::<Value>(&response_str)
             .map_err(|_| "Failed to parse response".to_string())
     }

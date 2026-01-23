@@ -10,3 +10,9 @@ mod interceptor_tests;
 
 #[path = "unit/executor_tests.rs"]
 mod executor_tests;
+
+#[path = "unit/auth_tests.rs"]
+mod auth_tests;
+
+#[path = "unit/rate_limit_tests.rs"]
+mod rate_limit_tests;

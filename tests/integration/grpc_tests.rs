@@ -20,6 +20,8 @@ async fn grpc_server_can_be_created() {
         host: "127.0.0.1".to_string(),
         port: 50051,
         db_path: None,
+        auth_provider: None,
+        rate_limit_config: None,
     };
 
     let server = GrpcServer::new(config);
@@ -33,6 +35,8 @@ async fn grpc_server_starts_on_configured_port() {
         host: "127.0.0.1".to_string(),
         port: 50052,
         db_path: None,
+        auth_provider: None,
+        rate_limit_config: None,
     };
 
     let server = GrpcServer::new(config).expect("create server");
@@ -61,6 +65,8 @@ async fn grpc_client_connects_to_server() {
         host: "127.0.0.1".to_string(),
         port: 50053,
         db_path: None,
+        auth_provider: None,
+        rate_limit_config: None,
     };
 
     let server = GrpcServer::new(config).expect("create server");
@@ -95,6 +101,8 @@ async fn grpc_server_serves_schema_over_network() {
         host: "127.0.0.1".to_string(),
         port: 50054,
         db_path: Some(db_path.clone()),
+        auth_provider: None,
+        rate_limit_config: None,
     };
 
     let server = GrpcServer::new(config).expect("create server");
@@ -152,6 +160,8 @@ async fn grpc_server_executes_query_over_network() {
         host: "127.0.0.1".to_string(),
         port: 50055,
         db_path: Some(db_path),
+        auth_provider: None,
+        rate_limit_config: None,
     };
 
     let server = GrpcServer::new(config).expect("create server");
@@ -192,6 +202,8 @@ async fn grpc_server_validates_query_over_network() {
         host: "127.0.0.1".to_string(),
         port: 50056,
         db_path: Some(db_path),
+        auth_provider: None,
+        rate_limit_config: None,
     };
 
     let server = GrpcServer::new(config).expect("create server");
@@ -240,6 +252,8 @@ async fn grpc_server_blocks_injection_over_network() {
         host: "127.0.0.1".to_string(),
         port: 50057,
         db_path: Some(db_path),
+        auth_provider: None,
+        rate_limit_config: None,
     };
 
     let server = GrpcServer::new(config).expect("create server");
@@ -291,6 +305,8 @@ async fn grpc_server_handles_concurrent_clients() {
         host: "127.0.0.1".to_string(),
         port: 50058,
         db_path: Some(db_path),
+        auth_provider: None,
+        rate_limit_config: None,
     };
 
     let server = GrpcServer::new(config).expect("create server");
@@ -348,6 +364,8 @@ async fn grpc_server_propagates_execution_events() {
         host: "127.0.0.1".to_string(),
         port: 50059,
         db_path: Some(db_path),
+        auth_provider: None,
+        rate_limit_config: None,
     };
 
     let server = GrpcServer::new(config).expect("create server");
@@ -378,6 +396,8 @@ async fn grpc_server_graceful_shutdown() {
         host: "127.0.0.1".to_string(),
         port: 50060,
         db_path: None,
+        auth_provider: None,
+        rate_limit_config: None,
     };
 
     let server = GrpcServer::new(config).expect("create server");
@@ -403,4 +423,63 @@ async fn grpc_server_graceful_shutdown() {
         result.is_err(),
         "Client should not be able to connect after shutdown"
     );
+}
+
+/// Test 1F.10: GrpcServer sends error response on malformed JSON
+#[tokio::test]
+async fn grpc_server_sends_error_on_malformed_json() {
+    use serde_json::json;
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+    let config = GrpcServerConfig {
+        host: "127.0.0.1".to_string(),
+        port: 50061,
+        db_path: None,
+        auth_provider: None,
+        rate_limit_config: None,
+    };
+
+    let server = GrpcServer::new(config).expect("create server");
+    let handle = server.start().await.expect("start server");
+
+    // Give the server time to bind
+    tokio::time::sleep(Duration::from_millis(100)).await;
+
+    // Connect directly with TCP and send malformed JSON
+    let mut socket = tokio::net::TcpStream::connect("127.0.0.1:50061")
+        .await
+        .expect("connect to server");
+
+    // Send malformed JSON
+    let malformed_json = "{invalid json";
+    socket
+        .write_all(malformed_json.as_bytes())
+        .await
+        .expect("write malformed json");
+
+    // Read error response
+    let mut buffer = [0u8; 256];
+    let n = socket.read(&mut buffer).await.expect("read error response");
+
+    let response_str = String::from_utf8_lossy(&buffer[..n]);
+    let response: serde_json::Value =
+        serde_json::from_str(&response_str).expect("parse error response as JSON");
+
+    // Verify we get a proper error response with status and error message
+    assert_eq!(
+        response.get("status"),
+        Some(&json!(3)),
+        "Should return status 3 for malformed request"
+    );
+    assert!(
+        response
+            .get("error")
+            .and_then(|e| e.as_str())
+            .map(|s| s.contains("Invalid JSON"))
+            .unwrap_or(false),
+        "Should return error message about invalid JSON"
+    );
+
+    // Cleanup
+    let _ = handle.stop().await;
 }

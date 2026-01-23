@@ -6,7 +6,10 @@ pub mod mirror;
 
 // Re-export commonly used types
 pub use executor::{QueryService, QueryServiceImpl, QueryStatus, SchemaService, SchemaServiceImpl};
-pub use grpc::{GrpcClient, GrpcServer, GrpcServerConfig};
+pub use grpc::{
+    ApiKeyAuth, AuthProvider, AuthenticatedClient, GrpcClient, GrpcServer, GrpcServerConfig,
+    RateLimitConfig, RateLimiter, RateLimiterStats, TokenAuth,
+};
 pub use interceptor::{
     get_event_bus, CriticalModelBehavior, CriticalStatusEvent, Event, EventBus, HasCriticalStatus,
 };

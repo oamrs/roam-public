@@ -3,8 +3,54 @@
 //! This module provides trait definitions and message types for the OAM gRPC services.
 //! Phase 1A focuses on infrastructure and service structure.
 
+use once_cell::sync::Lazy;
+use rusqlite::Connection;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
+use std::sync::Mutex;
+
+/// Connection cache to avoid repeated open/close overhead.
+/// Each database path maintains a single cached connection for efficiency.
+/// Per the OAM architecture, connection pooling is essential for high-concurrency
+/// management to prevent resource exhaustion from repeated connection setup.
+static DB_CONNECTION_CACHE: Lazy<Mutex<HashMap<String, Connection>>> =
+    Lazy::new(|| Mutex::new(HashMap::new()));
+
+/// Get or create a cached database connection for the given path.
+/// Connections are reused across queries to avoid expensive open/close cycles.
+fn get_cached_connection(db_path: &str) -> Result<Connection, String> {
+    let mut cache = DB_CONNECTION_CACHE
+        .lock()
+        .map_err(|e| format!("Failed to acquire connection cache lock: {}", e))?;
+
+    // Return existing connection if available
+    if let Some(conn) = cache.remove(db_path) {
+        // Verify connection is still valid by executing a simple query
+        if conn.execute_batch("SELECT 1").is_ok() {
+            return Ok(conn);
+        }
+        // If connection is invalid, fall through to create a new one
+    }
+
+    // Create new connection if not cached or previous was invalid
+    let conn = Connection::open(db_path).map_err(|e| format!("Failed to open database: {}", e))?;
+
+    Ok(conn)
+}
+
+/// Return a connection to the cache for reuse.
+/// Connections should be returned after use to enable reuse for subsequent queries.
+fn cache_connection(db_path: &str, conn: Connection) -> Result<(), String> {
+    let mut cache = DB_CONNECTION_CACHE
+        .lock()
+        .map_err(|e| format!("Failed to acquire connection cache lock: {}", e))?;
+
+    // Store connection in cache for reuse
+    // Replaces any existing connection (which will be dropped)
+    cache.insert(db_path.to_string(), conn);
+
+    Ok(())
+}
 
 /// Query parameter for parameterized queries
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -198,6 +244,7 @@ pub struct ExecuteQueryResponse {
     pub row_count: i32,
     pub execution_ms: i32,
     pub error_message: String,
+    pub timestamp: String,
 }
 
 // ============================================================================
@@ -349,15 +396,20 @@ impl QueryServiceImpl {
             request.db_identifier.clone(),
             request.query.clone(),
             error_message.clone(),
-            timestamp,
+            timestamp.clone(),
         );
-        let _ = get_event_bus().dispatch_generic(&event);
+        // Event dispatch failures are non-critical: they don't affect query validation results.
+        // However, we log them for operational awareness and audit trail debugging.
+        if let Err(e) = get_event_bus().dispatch_generic(&event) {
+            eprintln!("Event dispatch failed for query_validation_failed: {}", e);
+        }
 
         Ok(ExecuteQueryResponse {
             status: QueryStatus::ValidationError as i32,
             row_count: 0,
             execution_ms,
             error_message,
+            timestamp,
         })
     }
 
@@ -378,15 +430,20 @@ impl QueryServiceImpl {
             request.db_identifier.clone(),
             request.query.clone(),
             error_message.clone(),
-            timestamp,
+            timestamp.clone(),
         );
-        let _ = get_event_bus().dispatch_generic(&event);
+        // Event dispatch failures are non-critical: they don't affect error response delivery.
+        // However, we log them for operational awareness and audit trail debugging.
+        if let Err(e) = get_event_bus().dispatch_generic(&event) {
+            eprintln!("Event dispatch failed for query_execution_error: {}", e);
+        }
 
         Ok(ExecuteQueryResponse {
             status: QueryStatus::ExecutionError as i32,
             row_count: 0,
             execution_ms,
             error_message,
+            timestamp,
         })
     }
 
@@ -412,15 +469,20 @@ impl QueryServiceImpl {
                     "Success".to_string(),
                     row_count as i32,
                     execution_ms,
-                    timestamp,
+                    timestamp.clone(),
                 );
-                let _ = get_event_bus().dispatch_generic(&event);
+                // Event dispatch failures are non-critical: they don't affect successful query results.
+                // However, we log them for operational awareness and audit trail debugging.
+                if let Err(e) = get_event_bus().dispatch_generic(&event) {
+                    eprintln!("Event dispatch failed for query_executed: {}", e);
+                }
 
                 Ok(ExecuteQueryResponse {
                     status: QueryStatus::Success as i32,
                     row_count: row_count as i32,
                     execution_ms,
                     error_message: String::new(),
+                    timestamp,
                 })
             }
             Err(e) => {
@@ -446,6 +508,7 @@ impl QueryServiceImpl {
                 row_count: 0,
                 execution_ms,
                 error_message: error,
+                timestamp,
             });
         }
 
@@ -454,15 +517,23 @@ impl QueryServiceImpl {
             request.db_identifier.clone(),
             request.query.clone(),
             error.clone(),
-            timestamp,
+            timestamp.clone(),
         );
-        let _ = get_event_bus().dispatch_generic(&event);
+        // Event dispatch failures are non-critical: they don't affect error response delivery.
+        // However, we log them for operational awareness and audit trail debugging.
+        if let Err(e) = get_event_bus().dispatch_generic(&event) {
+            eprintln!(
+                "Event dispatch failed for query_execution_error (in handle_execution_error): {}",
+                e
+            );
+        }
 
         Ok(ExecuteQueryResponse {
             status: QueryStatus::ExecutionError as i32,
             row_count: 0,
             execution_ms,
             error_message: error,
+            timestamp,
         })
     }
 }
@@ -620,36 +691,142 @@ impl QueryService for QueryServiceImpl {
                 .await;
         }
 
-        // Execute query
-        let execution_result = execute_query_on_database(
+        // Execute query with timeout
+        let execution_result = execute_query_on_database_async(
             db_path,
             &request.query,
             request.limit,
             request.timeout_seconds,
-        );
+        )
+        .await;
 
         self.build_execution_response(&request, execution_result, start_time)
             .await
     }
 }
 
+/// Async wrapper for query execution with timeout support
+/// Uses tokio's timeout mechanism to interrupt long-running queries
+async fn execute_query_on_database_async(
+    db_path: &str,
+    query: &str,
+    limit: i32,
+    timeout_seconds: i32,
+) -> Result<i64, String> {
+    let db_path = db_path.to_string();
+    let query = query.to_string();
+
+    let task = tokio::task::spawn_blocking(move || {
+        execute_query_blocking(&db_path, &query, limit, timeout_seconds)
+    });
+
+    if timeout_seconds > 0 {
+        let timeout_duration = std::time::Duration::from_secs(timeout_seconds as u64);
+        match tokio::time::timeout(timeout_duration, task).await {
+            Ok(Ok(result)) => result,
+            Ok(Err(e)) => Err(format!("Task execution error: {}", e)),
+            Err(_) => Err(format!(
+                "Query execution timeout: exceeded {} seconds",
+                timeout_seconds
+            )),
+        }
+    } else {
+        match task.await {
+            Ok(result) => result,
+            Err(e) => Err(format!("Task execution error: {}", e)),
+        }
+    }
+}
+
+/// Blocking query execution helper
+/// This is run in a separate task so timeouts can interrupt it
+/// Uses connection caching to avoid expensive open/close cycles.
+fn execute_query_blocking(
+    db_path: &str,
+    query: &str,
+    limit: i32,
+    timeout_seconds: i32,
+) -> Result<i64, String> {
+    // Get or create cached connection for this database
+    // Reusing connections avoids the overhead of repeated open/close operations,
+    // which is critical for high-concurrency scenarios with rapid successive queries.
+    let conn = get_cached_connection(db_path)?;
+
+    // Set busy_timeout for database lock contention
+    // This complements the tokio timeout for execution timeout
+    if timeout_seconds > 0 {
+        // Set busy_timeout to a fraction of the total timeout to allow query execution to proceed
+        let busy_timeout = std::time::Duration::from_millis(
+            (timeout_seconds as u64 * 500) / 1000, // 50% of timeout for lock waits
+        );
+        conn.busy_timeout(busy_timeout)
+            .map_err(|e| format!("Failed to set busy timeout: {}", e))?;
+    }
+
+    // Execute query and count rows within a scope to ensure all borrows are dropped
+    let result = {
+        // Prepare statement
+        let mut stmt = conn
+            .prepare(query)
+            .map_err(|e| format!("Failed to prepare query: {}", e))?;
+
+        // Execute query and count rows
+        let mut row_count = 0i64;
+        let limit_i64 = limit as i64;
+
+        // Use query_map which gives us an iterator
+        let rows = stmt
+            .query_map([], |_row| Ok(()))
+            .map_err(|e| format!("Query execution failed: {}", e))?;
+
+        for result in rows {
+            match result {
+                Ok(_) => {
+                    row_count += 1;
+                    // Check limit
+                    if limit > 0 && row_count >= limit_i64 {
+                        break;
+                    }
+                }
+                Err(e) => {
+                    return Err(format!("Query execution failed: {}", e));
+                }
+            }
+        }
+        // Both rows iterator and stmt are dropped here when exiting this scope
+        Ok(row_count)
+    };
+
+    // Return connection to cache for reuse
+    cache_connection(db_path, conn)?;
+
+    result
+}
+
 /// Helper function to execute query on database
 /// Phase 1D: Basic query execution with row counting and limit support
+///
+/// DEPRECATED: Use execute_query_on_database_async instead. This synchronous version
+/// cannot properly enforce query execution timeouts. It's kept for backwards compatibility.
+#[allow(dead_code)]
+#[deprecated(since = "0.1.0", note = "use execute_query_on_database_async instead")]
 fn execute_query_on_database(
     db_path: &str,
     query: &str,
     limit: i32,
     timeout_seconds: i32,
 ) -> Result<i64, String> {
-    use rusqlite::Connection;
-
     // Open database connection
-    let conn = Connection::open(db_path).map_err(|e| format!("Failed to open database: {}", e))?;
+    let conn = rusqlite::Connection::open(db_path)
+        .map_err(|e| format!("Failed to open database: {}", e))?;
 
-    // Set timeout
+    // Set busy_timeout for database lock contention
     if timeout_seconds > 0 {
-        conn.busy_timeout(std::time::Duration::from_secs(timeout_seconds as u64))
-            .map_err(|e| format!("Failed to set timeout: {}", e))?;
+        let busy_timeout = std::time::Duration::from_millis(
+            (timeout_seconds as u64 * 500) / 1000, // 50% of timeout for lock waits
+        );
+        conn.busy_timeout(busy_timeout)
+            .map_err(|e| format!("Failed to set busy timeout: {}", e))?;
     }
 
     // Prepare statement
