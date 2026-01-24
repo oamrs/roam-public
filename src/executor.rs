@@ -1,7 +1,6 @@
-//! OAM Executor: gRPC service definitions for Phase 1A
+//! OAM Executor: Query and schema service implementations
 //!
-//! This module provides trait definitions and message types for the OAM gRPC services.
-//! Phase 1A focuses on infrastructure and service structure.
+//! This module provides trait definitions and message types for query execution and schema introspection.
 
 use once_cell::sync::Lazy;
 use rusqlite::Connection;
@@ -11,8 +10,6 @@ use std::sync::Mutex;
 
 /// Connection cache to avoid repeated open/close overhead.
 /// Each database path maintains a single cached connection for efficiency.
-/// Per the OAM architecture, connection pooling is essential for high-concurrency
-/// management to prevent resource exhaustion from repeated connection setup.
 static DB_CONNECTION_CACHE: Lazy<Mutex<HashMap<String, Connection>>> =
     Lazy::new(|| Mutex::new(HashMap::new()));
 
@@ -25,14 +22,11 @@ fn get_cached_connection(db_path: &str) -> Result<Connection, String> {
 
     // Return existing connection if available
     if let Some(conn) = cache.remove(db_path) {
-        // Verify connection is still valid by executing a simple query
         if conn.execute_batch("SELECT 1").is_ok() {
             return Ok(conn);
         }
-        // If connection is invalid, fall through to create a new one
     }
 
-    // Create new connection if not cached or previous was invalid
     let conn = Connection::open(db_path).map_err(|e| format!("Failed to open database: {}", e))?;
 
     Ok(conn)
@@ -45,8 +39,6 @@ fn cache_connection(db_path: &str, conn: Connection) -> Result<(), String> {
         .lock()
         .map_err(|e| format!("Failed to acquire connection cache lock: {}", e))?;
 
-    // Store connection in cache for reuse
-    // Replaces any existing connection (which will be dropped)
     cache.insert(db_path.to_string(), conn);
 
     Ok(())
@@ -247,14 +239,7 @@ pub struct ExecuteQueryResponse {
     pub timestamp: String,
 }
 
-// ============================================================================
-// SERVICE IMPLEMENTATIONS
-// ============================================================================
-
-/// Default SchemaService implementation
-///
-/// Phase 1A: Basic structure with placeholder responses
-/// Phase 1B: Optionally supports database path for introspection
+/// SchemaService implementation
 pub struct SchemaServiceImpl {
     db_path: Option<String>,
 }
@@ -264,7 +249,7 @@ impl SchemaServiceImpl {
         Self { db_path: None }
     }
 
-    /// Set database path for Phase 1B introspection features
+    /// Set database path for introspection
     pub fn set_db_path(&mut self, db_path: &str) -> Result<(), String> {
         self.db_path = Some(db_path.to_string());
         Ok(())
@@ -280,7 +265,6 @@ impl Default for SchemaServiceImpl {
 #[async_trait::async_trait]
 impl SchemaService for SchemaServiceImpl {
     async fn get_schema(&self, _request: GetSchemaRequest) -> Result<GetSchemaResponse, String> {
-        // Phase 1A: Return placeholder response
         if self.db_path.is_none() {
             return Ok(GetSchemaResponse {
                 schema_id: format!("schema_{}", uuid::Uuid::new_v4()),
@@ -289,7 +273,6 @@ impl SchemaService for SchemaServiceImpl {
             });
         }
 
-        // Phase 1B: Database-backed introspection
         use crate::mirror::introspect_sqlite_path;
 
         let db_path = self.db_path.as_ref().unwrap();
@@ -304,21 +287,18 @@ impl SchemaService for SchemaServiceImpl {
     }
 
     async fn get_table(&self, request: GetTableRequest) -> Result<GetTableResponse, String> {
-        // Phase 1A: Return placeholder if no db_path
         if self.db_path.is_none() {
             return Ok(GetTableResponse {
                 generated_at: chrono::Utc::now().to_rfc3339(),
             });
         }
 
-        // Phase 1B: Database-backed table retrieval
         use crate::mirror::introspect_sqlite_path;
 
         let db_path = self.db_path.as_ref().unwrap();
         let schema = introspect_sqlite_path(db_path)
             .map_err(|e| format!("Failed to introspect schema: {}", e))?;
 
-        // Validate table exists
         let _table = schema
             .tables
             .iter()
@@ -331,10 +311,7 @@ impl SchemaService for SchemaServiceImpl {
     }
 }
 
-/// Default QueryService implementation
-///
-/// Phase 1A: Basic structure with placeholder responses
-/// Phase 1B: Optionally supports database path for validation
+/// QueryService implementation
 pub struct QueryServiceImpl {
     db_path: Option<String>,
 }
@@ -344,18 +321,15 @@ impl QueryServiceImpl {
         Self { db_path: None }
     }
 
-    /// Set database path for Phase 1B validation features
+    /// Set database path for query validation
     pub fn set_db_path(&mut self, db_path: &str) -> Result<(), String> {
         self.db_path = Some(db_path.to_string());
         Ok(())
     }
 
-    /// Run P2SQL security pattern checks
-    /// Returns error message if any pattern matches, None if all pass
+    /// Run security pattern checks on query
     fn check_security_patterns(query: &str) -> Option<String> {
         let query_upper = query.to_uppercase();
-
-        // Check patterns in order of priority (comments first for safety)
         [
             SecurityPattern::LineComment,
             SecurityPattern::BlockComment,
@@ -372,7 +346,6 @@ impl QueryServiceImpl {
         .find_map(|pattern| pattern.check(query, &query_upper))
     }
 
-    /// Check for mutation keywords (DML/DDL)
     fn check_mutation_keywords(query_upper: &str) -> Option<String> {
         [MutationPattern::Dml, MutationPattern::Ddl]
             .iter()
@@ -398,8 +371,6 @@ impl QueryServiceImpl {
             error_message.clone(),
             timestamp.clone(),
         );
-        // Event dispatch failures are non-critical: they don't affect query validation results.
-        // However, we log them for operational awareness and audit trail debugging.
         if let Err(e) = get_event_bus().dispatch_generic(&event) {
             eprintln!("Event dispatch failed for query_validation_failed: {}", e);
         }
@@ -432,8 +403,6 @@ impl QueryServiceImpl {
             error_message.clone(),
             timestamp.clone(),
         );
-        // Event dispatch failures are non-critical: they don't affect error response delivery.
-        // However, we log them for operational awareness and audit trail debugging.
         if let Err(e) = get_event_bus().dispatch_generic(&event) {
             eprintln!("Event dispatch failed for query_execution_error: {}", e);
         }
@@ -462,7 +431,6 @@ impl QueryServiceImpl {
 
         match execution_result {
             Ok(row_count) => {
-                // Phase 1E: Dispatch QueryExecuted event on success
                 let event = Event::query_executed(
                     request.db_identifier.clone(),
                     request.query.clone(),
@@ -471,8 +439,6 @@ impl QueryServiceImpl {
                     execution_ms,
                     timestamp.clone(),
                 );
-                // Event dispatch failures are non-critical: they don't affect successful query results.
-                // However, we log them for operational awareness and audit trail debugging.
                 if let Err(e) = get_event_bus().dispatch_generic(&event) {
                     eprintln!("Event dispatch failed for query_executed: {}", e);
                 }
@@ -513,14 +479,13 @@ impl QueryServiceImpl {
         }
 
         // Phase 1E: Dispatch QueryExecutionError event
+        // Phase 1E: Dispatch QueryExecutionError event
         let event = Event::query_execution_error(
             request.db_identifier.clone(),
             request.query.clone(),
             error.clone(),
             timestamp.clone(),
         );
-        // Event dispatch failures are non-critical: they don't affect error response delivery.
-        // However, we log them for operational awareness and audit trail debugging.
         if let Err(e) = get_event_bus().dispatch_generic(&event) {
             eprintln!(
                 "Event dispatch failed for query_execution_error (in handle_execution_error): {}",
@@ -550,7 +515,6 @@ impl QueryService for QueryServiceImpl {
         &self,
         request: ValidateQueryRequest,
     ) -> Result<ValidationResponse, String> {
-        // Phase 1A: If no db_path set, return placeholder
         let db_path = match &self.db_path {
             Some(path) => path,
             None => {
@@ -561,12 +525,10 @@ impl QueryService for QueryServiceImpl {
             }
         };
 
-        // Phase 1B: Database-backed validation
         use crate::mirror::introspect_sqlite_path;
 
         let query_upper = request.query.to_uppercase();
 
-        // Phase 1C: P2SQL SECURITY CHECKS - Pattern matching approach
         if let Some(error_message) = Self::check_security_patterns(&request.query) {
             return Ok(ValidationResponse {
                 valid: false,
@@ -646,7 +608,6 @@ impl QueryService for QueryServiceImpl {
     ) -> Result<ExecuteQueryResponse, String> {
         let start_time = std::time::Instant::now();
 
-        // Phase 1D: Check basic security patterns first
         if let Some(error_msg) = Self::check_security_patterns(&request.query) {
             return self
                 .build_validation_error_response(&request, error_msg, start_time)
@@ -706,7 +667,6 @@ impl QueryService for QueryServiceImpl {
 }
 
 /// Async wrapper for query execution with timeout support
-/// Uses tokio's timeout mechanism to interrupt long-running queries
 async fn execute_query_on_database_async(
     db_path: &str,
     query: &str,
@@ -738,18 +698,12 @@ async fn execute_query_on_database_async(
     }
 }
 
-/// Blocking query execution helper
-/// This is run in a separate task so timeouts can interrupt it
-/// Uses connection caching to avoid expensive open/close cycles.
 fn execute_query_blocking(
     db_path: &str,
     query: &str,
     limit: i32,
     timeout_seconds: i32,
 ) -> Result<i64, String> {
-    // Get or create cached connection for this database
-    // Reusing connections avoids the overhead of repeated open/close operations,
-    // which is critical for high-concurrency scenarios with rapid successive queries.
     let conn = get_cached_connection(db_path)?;
 
     // Set busy_timeout for database lock contention
@@ -765,16 +719,13 @@ fn execute_query_blocking(
 
     // Execute query and count rows within a scope to ensure all borrows are dropped
     let result = {
-        // Prepare statement
         let mut stmt = conn
             .prepare(query)
             .map_err(|e| format!("Failed to prepare query: {}", e))?;
 
-        // Execute query and count rows
         let mut row_count = 0i64;
         let limit_i64 = limit as i64;
 
-        // Use query_map which gives us an iterator
         let rows = stmt
             .query_map([], |_row| Ok(()))
             .map_err(|e| format!("Query execution failed: {}", e))?;
@@ -783,7 +734,6 @@ fn execute_query_blocking(
             match result {
                 Ok(_) => {
                     row_count += 1;
-                    // Check limit
                     if limit > 0 && row_count >= limit_i64 {
                         break;
                     }
@@ -793,7 +743,6 @@ fn execute_query_blocking(
                 }
             }
         }
-        // Both rows iterator and stmt are dropped here when exiting this scope
         Ok(row_count)
     };
 
@@ -803,58 +752,3 @@ fn execute_query_blocking(
     result
 }
 
-/// Helper function to execute query on database
-/// Phase 1D: Basic query execution with row counting and limit support
-///
-/// DEPRECATED: Use execute_query_on_database_async instead. This synchronous version
-/// cannot properly enforce query execution timeouts. It's kept for backwards compatibility.
-#[allow(dead_code)]
-#[deprecated(since = "0.1.0", note = "use execute_query_on_database_async instead")]
-fn execute_query_on_database(
-    db_path: &str,
-    query: &str,
-    limit: i32,
-    timeout_seconds: i32,
-) -> Result<i64, String> {
-    // Open database connection
-    let conn = rusqlite::Connection::open(db_path)
-        .map_err(|e| format!("Failed to open database: {}", e))?;
-
-    // Set busy_timeout for database lock contention
-    if timeout_seconds > 0 {
-        let busy_timeout = std::time::Duration::from_millis(
-            (timeout_seconds as u64 * 500) / 1000, // 50% of timeout for lock waits
-        );
-        conn.busy_timeout(busy_timeout)
-            .map_err(|e| format!("Failed to set busy timeout: {}", e))?;
-    }
-
-    // Prepare statement
-    let mut stmt = conn
-        .prepare(query)
-        .map_err(|e| format!("Failed to prepare query: {}", e))?;
-
-    // Execute query and count rows
-    let mut row_count = 0i64;
-    let limit_i64 = limit as i64;
-
-    // Use query_map which gives us an iterator
-    let rows = stmt
-        .query_map([], |_row| Ok(()))
-        .map_err(|e| format!("Query execution failed: {}", e))?;
-
-    for result in rows {
-        match result {
-            Ok(_) => {
-                row_count += 1;
-                // Check limit
-                if limit > 0 && row_count >= limit_i64 {
-                    break;
-                }
-            }
-            Err(e) => return Err(format!("Query execution failed: {}", e)),
-        }
-    }
-
-    Ok(row_count)
-}

@@ -1,4 +1,4 @@
-use oam::grpc::auth::{ApiKeyAuth, AuthProvider, AuthenticatedClient, TokenAuth};
+use oam::tcp::auth::{ApiKeyAuth, AuthProvider, AuthenticatedClient, TokenAuth};
 
 #[test]
 fn test_api_key_auth() {

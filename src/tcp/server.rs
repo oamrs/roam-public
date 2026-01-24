@@ -1,7 +1,7 @@
-//! Tonic/gRPC Server Implementation for Phase 1F
+//! JSON-RPC Server Implementation over TCP
 //!
-//! This module provides the gRPC server that exposes QueryService and SchemaService
-//! over HTTP/2 using Tonic.
+//! This module provides a JSON-RPC server that exposes QueryService and SchemaService
+//! over TCP with JSON-encoded request/response messages.
 
 use super::auth::AuthProvider;
 use super::rate_limit::{RateLimitConfig, RateLimiter};
@@ -11,9 +11,9 @@ use std::collections::HashMap;
 use std::net::SocketAddr;
 use std::sync::Arc;
 
-/// Configuration for the gRPC server
+/// Configuration for the JSON-RPC server
 #[derive(Clone, Debug)]
-pub struct GrpcServerConfig {
+pub struct JsonRpcServerConfig {
     pub host: String,
     pub port: u16,
     pub db_path: Option<String>,
@@ -21,7 +21,7 @@ pub struct GrpcServerConfig {
     pub rate_limit_config: Option<RateLimitConfig>,
 }
 
-/// Handle for controlling a running gRPC server
+/// Handle for controlling a running JSON-RPC server
 pub struct ServerHandle {
     shutdown_tx: tokio::sync::oneshot::Sender<()>,
 }
@@ -36,17 +36,20 @@ impl ServerHandle {
     }
 }
 
-/// Tonic gRPC Server
-pub struct GrpcServer {
-    config: GrpcServerConfig,
+/// JSON-RPC Server for OAM services
+///
+/// Provides QueryService and SchemaService over TCP with JSON-encoded messages.
+/// Implements authentication, rate limiting, and proper error handling.
+pub struct JsonRpcServer {
+    config: JsonRpcServerConfig,
     query_service: Arc<QueryServiceImpl>,
     schema_service: Arc<SchemaServiceImpl>,
     rate_limiter: Option<Arc<RateLimiter>>,
 }
 
-impl GrpcServer {
-    /// Create a new gRPC server with the given configuration
-    pub fn new(config: GrpcServerConfig) -> Result<Self, String> {
+impl JsonRpcServer {
+    /// Create a new JSON-RPC server with the given configuration
+    pub fn new(config: JsonRpcServerConfig) -> Result<Self, String> {
         let mut query_service = QueryServiceImpl::new();
         let mut schema_service = SchemaServiceImpl::new();
 
@@ -62,7 +65,7 @@ impl GrpcServer {
             .as_ref()
             .map(|config| Arc::new(RateLimiter::new(config.clone())));
 
-        Ok(GrpcServer {
+        Ok(JsonRpcServer {
             config,
             query_service: Arc::new(query_service),
             schema_service: Arc::new(schema_service),
@@ -287,7 +290,7 @@ impl GrpcServer {
         }
     }
 
-    /// Start the gRPC server and return a handle
+    /// Start the JSON-RPC server and return a handle
     pub async fn start(self) -> Result<ServerHandle, String> {
         let addr = self.parse_socket_addr()?;
         let (shutdown_tx, mut shutdown_rx) = tokio::sync::oneshot::channel::<()>();

@@ -1,13 +1,13 @@
 pub mod executor;
 pub mod generated;
-pub mod grpc;
+pub mod tcp;
 pub mod interceptor;
 pub mod mirror;
 
 // Re-export commonly used types
 pub use executor::{QueryService, QueryServiceImpl, QueryStatus, SchemaService, SchemaServiceImpl};
-pub use grpc::{
-    ApiKeyAuth, AuthProvider, AuthenticatedClient, GrpcClient, GrpcServer, GrpcServerConfig,
+pub use tcp::{
+    ApiKeyAuth, AuthProvider, AuthenticatedClient, JsonRpcClient, JsonRpcServer, JsonRpcServerConfig,
     RateLimitConfig, RateLimiter, RateLimiterStats, TokenAuth,
 };
 pub use interceptor::{

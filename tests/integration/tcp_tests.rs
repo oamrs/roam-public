@@ -1,22 +1,12 @@
-// ============================================================================
-// PHASE 1F: Tonic/gRPC Server Integration Tests
-// ============================================================================
-//
-// These tests verify the gRPC server implementation and network-based
-// communication between client and server. Following TDD discipline:
-// 1. Write failing tests for desired functionality
-// 2. Implement minimal production code to pass tests
-// 3. Refactor for quality
-
-use oam::grpc::client::GrpcClient;
-use oam::grpc::server::{GrpcServer, GrpcServerConfig};
+use oam::tcp::client::JsonRpcClient;
+use oam::tcp::server::{JsonRpcServer, JsonRpcServerConfig};
 use std::time::Duration;
 use tempfile::NamedTempFile;
 
-/// Test 1F.1: GrpcServer can be created and configured
+/// Test 1F.1: JsonRpcServer can be created and configured
 #[tokio::test]
-async fn grpc_server_can_be_created() {
-    let config = GrpcServerConfig {
+async fn tcp_server_can_be_created() {
+    let config = JsonRpcServerConfig {
         host: "127.0.0.1".to_string(),
         port: 50051,
         db_path: None,
@@ -24,14 +14,14 @@ async fn grpc_server_can_be_created() {
         rate_limit_config: None,
     };
 
-    let server = GrpcServer::new(config);
-    assert!(server.is_ok(), "GrpcServer should be creatable");
+    let server = JsonRpcServer::new(config);
+    assert!(server.is_ok(), "JsonRpcServer should be creatable");
 }
 
-/// Test 1F.2: GrpcServer can be started on configured port
+/// Test 1F.2: JsonRpcServer can be started on configured port
 #[tokio::test]
-async fn grpc_server_starts_on_configured_port() {
-    let config = GrpcServerConfig {
+async fn tcp_server_starts_on_configured_port() {
+    let config = JsonRpcServerConfig {
         host: "127.0.0.1".to_string(),
         port: 50052,
         db_path: None,
@@ -39,7 +29,7 @@ async fn grpc_server_starts_on_configured_port() {
         rate_limit_config: None,
     };
 
-    let server = GrpcServer::new(config).expect("create server");
+    let server = JsonRpcServer::new(config).expect("create server");
     let handle = server.start().await;
     assert!(handle.is_ok(), "Server should start successfully");
 
@@ -47,7 +37,7 @@ async fn grpc_server_starts_on_configured_port() {
     tokio::time::sleep(Duration::from_millis(100)).await;
 
     // Verify server is running by attempting connection
-    let client = GrpcClient::connect("http://127.0.0.1:50052").await;
+    let client = JsonRpcClient::connect("http://127.0.0.1:50052").await;
 
     assert!(
         client.is_ok(),
@@ -58,10 +48,10 @@ async fn grpc_server_starts_on_configured_port() {
     let _result = handle.unwrap().stop().await;
 }
 
-/// Test 1F.3: GrpcClient can connect to running GrpcServer
+/// Test 1F.3: JsonRpcClient can connect to running JsonRpcServer
 #[tokio::test]
-async fn grpc_client_connects_to_server() {
-    let config = GrpcServerConfig {
+async fn tcp_client_connects_to_server() {
+    let config = JsonRpcServerConfig {
         host: "127.0.0.1".to_string(),
         port: 50053,
         db_path: None,
@@ -69,12 +59,12 @@ async fn grpc_client_connects_to_server() {
         rate_limit_config: None,
     };
 
-    let server = GrpcServer::new(config).expect("create server");
+    let server = JsonRpcServer::new(config).expect("create server");
     let handle = server.start().await.expect("start server");
 
     tokio::time::sleep(Duration::from_millis(100)).await;
 
-    let client = GrpcClient::connect("http://127.0.0.1:50053")
+    let client = JsonRpcClient::connect("http://127.0.0.1:50053")
         .await
         .expect("create client");
 
@@ -83,9 +73,9 @@ async fn grpc_client_connects_to_server() {
     let _result = handle.stop().await;
 }
 
-/// Test 1F.4: GrpcServer with database path can serve schema requests
+/// Test 1F.4: JsonRpcServer with database path can serve schema requests
 #[tokio::test]
-async fn grpc_server_serves_schema_over_network() {
+async fn tcp_server_serves_schema_over_network() {
     // Setup test database
     let tmp = NamedTempFile::new().expect("create tmp file");
     let db_path = tmp.path().to_str().unwrap().to_string();
@@ -97,7 +87,7 @@ async fn grpc_server_serves_schema_over_network() {
     drop(_conn);
 
     // Start server with database
-    let config = GrpcServerConfig {
+    let config = JsonRpcServerConfig {
         host: "127.0.0.1".to_string(),
         port: 50054,
         db_path: Some(db_path.clone()),
@@ -105,13 +95,13 @@ async fn grpc_server_serves_schema_over_network() {
         rate_limit_config: None,
     };
 
-    let server = GrpcServer::new(config).expect("create server");
+    let server = JsonRpcServer::new(config).expect("create server");
     let handle = server.start().await.expect("start server");
 
     tokio::time::sleep(Duration::from_millis(100)).await;
 
     // Connect client and request schema
-    let client = GrpcClient::connect("http://127.0.0.1:50054")
+    let client = JsonRpcClient::connect("http://127.0.0.1:50054")
         .await
         .expect("create client");
 
@@ -127,9 +117,9 @@ async fn grpc_server_serves_schema_over_network() {
     let _result = handle.stop().await;
 }
 
-/// Test 1F.5: GrpcServer can execute queries over network
+/// Test 1F.5: JsonRpcServer can execute queries over network
 #[tokio::test]
-async fn grpc_server_executes_query_over_network() {
+async fn tcp_server_executes_query_over_network() {
     // Setup test database with data
     let tmp = NamedTempFile::new().expect("create tmp file");
     let db_path = tmp.path().to_str().unwrap().to_string();
@@ -156,7 +146,7 @@ async fn grpc_server_executes_query_over_network() {
     drop(_conn);
 
     // Start server
-    let config = GrpcServerConfig {
+    let config = JsonRpcServerConfig {
         host: "127.0.0.1".to_string(),
         port: 50055,
         db_path: Some(db_path),
@@ -164,13 +154,13 @@ async fn grpc_server_executes_query_over_network() {
         rate_limit_config: None,
     };
 
-    let server = GrpcServer::new(config).expect("create server");
+    let server = JsonRpcServer::new(config).expect("create server");
     let handle = server.start().await.expect("start server");
 
     tokio::time::sleep(Duration::from_millis(100)).await;
 
     // Connect and execute query
-    let client = GrpcClient::connect("http://127.0.0.1:50055")
+    let client = JsonRpcClient::connect("http://127.0.0.1:50055")
         .await
         .expect("create client");
 
@@ -186,9 +176,9 @@ async fn grpc_server_executes_query_over_network() {
     let _result = handle.stop().await;
 }
 
-/// Test 1F.6: GrpcServer validates queries before execution
+/// Test 1F.6: JsonRpcServer validates queries before execution
 #[tokio::test]
-async fn grpc_server_validates_query_over_network() {
+async fn tcp_server_validates_query_over_network() {
     let tmp = NamedTempFile::new().expect("create tmp file");
     let db_path = tmp.path().to_str().unwrap().to_string();
 
@@ -198,7 +188,7 @@ async fn grpc_server_validates_query_over_network() {
         .expect("create table");
     drop(_conn);
 
-    let config = GrpcServerConfig {
+    let config = JsonRpcServerConfig {
         host: "127.0.0.1".to_string(),
         port: 50056,
         db_path: Some(db_path),
@@ -206,12 +196,12 @@ async fn grpc_server_validates_query_over_network() {
         rate_limit_config: None,
     };
 
-    let server = GrpcServer::new(config).expect("create server");
+    let server = JsonRpcServer::new(config).expect("create server");
     let handle = server.start().await.expect("start server");
 
     tokio::time::sleep(Duration::from_millis(100)).await;
 
-    let client = GrpcClient::connect("http://127.0.0.1:50056")
+    let client = JsonRpcClient::connect("http://127.0.0.1:50056")
         .await
         .expect("create client");
 
@@ -236,9 +226,9 @@ async fn grpc_server_validates_query_over_network() {
     let _result = handle.stop().await;
 }
 
-/// Test 1F.7: GrpcServer rejects malicious queries over network
+/// Test 1F.7: JsonRpcServer rejects malicious queries over network
 #[tokio::test]
-async fn grpc_server_blocks_injection_over_network() {
+async fn tcp_server_blocks_injection_over_network() {
     let tmp = NamedTempFile::new().expect("create tmp file");
     let db_path = tmp.path().to_str().unwrap().to_string();
 
@@ -248,7 +238,7 @@ async fn grpc_server_blocks_injection_over_network() {
         .expect("create table");
     drop(_conn);
 
-    let config = GrpcServerConfig {
+    let config = JsonRpcServerConfig {
         host: "127.0.0.1".to_string(),
         port: 50057,
         db_path: Some(db_path),
@@ -256,12 +246,12 @@ async fn grpc_server_blocks_injection_over_network() {
         rate_limit_config: None,
     };
 
-    let server = GrpcServer::new(config).expect("create server");
+    let server = JsonRpcServer::new(config).expect("create server");
     let handle = server.start().await.expect("start server");
 
     tokio::time::sleep(Duration::from_millis(100)).await;
 
-    let client = GrpcClient::connect("http://127.0.0.1:50057")
+    let client = JsonRpcClient::connect("http://127.0.0.1:50057")
         .await
         .expect("create client");
 
@@ -281,9 +271,9 @@ async fn grpc_server_blocks_injection_over_network() {
     let _result = handle.stop().await;
 }
 
-/// Test 1F.8: GrpcServer handles multiple concurrent clients
+/// Test 1F.8: JsonRpcServer handles multiple concurrent clients
 #[tokio::test]
-async fn grpc_server_handles_concurrent_clients() {
+async fn tcp_server_handles_concurrent_clients() {
     let tmp = NamedTempFile::new().expect("create tmp file");
     let db_path = tmp.path().to_str().unwrap().to_string();
 
@@ -301,7 +291,7 @@ async fn grpc_server_handles_concurrent_clients() {
     }
     drop(_conn);
 
-    let config = GrpcServerConfig {
+    let config = JsonRpcServerConfig {
         host: "127.0.0.1".to_string(),
         port: 50058,
         db_path: Some(db_path),
@@ -309,7 +299,7 @@ async fn grpc_server_handles_concurrent_clients() {
         rate_limit_config: None,
     };
 
-    let server = GrpcServer::new(config).expect("create server");
+    let server = JsonRpcServer::new(config).expect("create server");
     let handle = server.start().await.expect("start server");
 
     tokio::time::sleep(Duration::from_millis(100)).await;
@@ -319,7 +309,7 @@ async fn grpc_server_handles_concurrent_clients() {
 
     for i in 0..3 {
         let handle = tokio::spawn(async move {
-            let client = GrpcClient::connect("http://127.0.0.1:50058")
+            let client = JsonRpcClient::connect("http://127.0.0.1:50058")
                 .await
                 .expect("create client");
 
@@ -342,9 +332,9 @@ async fn grpc_server_handles_concurrent_clients() {
     let _result = handle.stop().await;
 }
 
-/// Test 1F.9: GrpcServer propagates events over gRPC
+/// Test 1F.9: JsonRpcServer propagates events over gRPC
 #[tokio::test]
-async fn grpc_server_propagates_execution_events() {
+async fn tcp_server_propagates_execution_events() {
     let tmp = NamedTempFile::new().expect("create tmp file");
     let db_path = tmp.path().to_str().unwrap().to_string();
 
@@ -360,7 +350,7 @@ async fn grpc_server_propagates_execution_events() {
         .expect("insert row");
     drop(_conn);
 
-    let config = GrpcServerConfig {
+    let config = JsonRpcServerConfig {
         host: "127.0.0.1".to_string(),
         port: 50059,
         db_path: Some(db_path),
@@ -368,12 +358,12 @@ async fn grpc_server_propagates_execution_events() {
         rate_limit_config: None,
     };
 
-    let server = GrpcServer::new(config).expect("create server");
+    let server = JsonRpcServer::new(config).expect("create server");
     let handle = server.start().await.expect("start server");
 
     tokio::time::sleep(Duration::from_millis(100)).await;
 
-    let client = GrpcClient::connect("http://127.0.0.1:50059")
+    let client = JsonRpcClient::connect("http://127.0.0.1:50059")
         .await
         .expect("create client");
 
@@ -389,10 +379,10 @@ async fn grpc_server_propagates_execution_events() {
     let _result = handle.stop().await;
 }
 
-/// Test 1F.10: GrpcServer can be gracefully shut down
+/// Test 1F.10: JsonRpcServer can be gracefully shut down
 #[tokio::test]
-async fn grpc_server_graceful_shutdown() {
-    let config = GrpcServerConfig {
+async fn tcp_server_graceful_shutdown() {
+    let config = JsonRpcServerConfig {
         host: "127.0.0.1".to_string(),
         port: 50060,
         db_path: None,
@@ -400,13 +390,13 @@ async fn grpc_server_graceful_shutdown() {
         rate_limit_config: None,
     };
 
-    let server = GrpcServer::new(config).expect("create server");
+    let server = JsonRpcServer::new(config).expect("create server");
     let handle = server.start().await.expect("start server");
 
     tokio::time::sleep(Duration::from_millis(100)).await;
 
     // Verify client can connect
-    let client = GrpcClient::connect("http://127.0.0.1:50060")
+    let client = JsonRpcClient::connect("http://127.0.0.1:50060")
         .await
         .expect("create client");
     assert!(client.is_connected(), "Client should be connected");
@@ -418,20 +408,20 @@ async fn grpc_server_graceful_shutdown() {
     tokio::time::sleep(Duration::from_millis(100)).await;
 
     // Verify client cannot connect after shutdown
-    let result = GrpcClient::connect("http://127.0.0.1:50060").await;
+    let result = JsonRpcClient::connect("http://127.0.0.1:50060").await;
     assert!(
         result.is_err(),
         "Client should not be able to connect after shutdown"
     );
 }
 
-/// Test 1F.10: GrpcServer sends error response on malformed JSON
+/// Test 1F.10: JsonRpcServer sends error response on malformed JSON
 #[tokio::test]
-async fn grpc_server_sends_error_on_malformed_json() {
+async fn tcp_server_sends_error_on_malformed_json() {
     use serde_json::json;
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
-    let config = GrpcServerConfig {
+    let config = JsonRpcServerConfig {
         host: "127.0.0.1".to_string(),
         port: 50061,
         db_path: None,
@@ -439,7 +429,7 @@ async fn grpc_server_sends_error_on_malformed_json() {
         rate_limit_config: None,
     };
 
-    let server = GrpcServer::new(config).expect("create server");
+    let server = JsonRpcServer::new(config).expect("create server");
     let handle = server.start().await.expect("start server");
 
     // Give the server time to bind

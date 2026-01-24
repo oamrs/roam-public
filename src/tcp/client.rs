@@ -1,6 +1,6 @@
-//! gRPC Client for Phase 1F
+//! JSON-RPC Client
 //!
-//! This module provides a client to connect to the gRPC server and execute
+//! This module provides a client to connect to the JSON-RPC server over TCP and execute
 //! schema and query operations over the network.
 
 use serde_json::{json, Value};
@@ -8,7 +8,7 @@ use std::net::ToSocketAddrs;
 use std::sync::Arc;
 use tokio::net::TcpStream;
 
-/// Response from executing a query over gRPC
+/// Response from executing a query over JSON-RPC
 #[derive(Debug, Clone)]
 pub struct QueryResponse {
     pub status: i32,
@@ -18,7 +18,7 @@ pub struct QueryResponse {
     pub timestamp: String,
 }
 
-/// Response from getting schema over gRPC
+/// Response from getting schema over JSON-RPC
 #[derive(Debug, Clone)]
 pub struct SchemaResponse {
     pub schema_id: String,
@@ -26,13 +26,13 @@ pub struct SchemaResponse {
     pub generated_at: String,
 }
 
-/// gRPC Client for connecting to the executor server
-pub struct GrpcClient {
+/// JSON-RPC Client for connecting to the executor server over TCP
+pub struct JsonRpcClient {
     address: String,
     connected: Arc<std::sync::atomic::AtomicBool>,
 }
 
-impl GrpcClient {
+impl JsonRpcClient {
     /// Normalize address by stripping protocol prefix if present
     fn normalize_address(address: &str) -> &str {
         if let Some(stripped) = address.strip_prefix("http://") {
@@ -44,7 +44,7 @@ impl GrpcClient {
         address
     }
 
-    /// Connect to a gRPC server at the given address
+    /// Connect to a JSON-RPC server at the given address
     pub async fn connect(address: &str) -> Result<Self, String> {
         let addr_with_port = Self::normalize_address(address);
 
@@ -52,7 +52,7 @@ impl GrpcClient {
         let resolved_addr = Self::resolve_address(addr_with_port)?;
         Self::verify_connection(resolved_addr).await?;
 
-        Ok(GrpcClient {
+        Ok(JsonRpcClient {
             address: addr_with_port.to_string(),
             connected: Arc::new(std::sync::atomic::AtomicBool::new(true)),
         })
