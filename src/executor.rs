@@ -751,4 +751,3 @@ fn execute_query_blocking(
 
     result
 }
-
