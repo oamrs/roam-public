@@ -1,9 +1,9 @@
 pub mod executor;
+pub mod ffi;
 pub mod generated;
 pub mod interceptor;
 pub mod mirror;
 pub mod tcp;
-pub mod ffi;
 
 // Re-export commonly used types
 pub use executor::{QueryService, QueryServiceImpl, QueryStatus, SchemaService, SchemaServiceImpl};
