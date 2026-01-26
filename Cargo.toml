@@ -9,6 +9,9 @@ repository = "https://github.com/oamrs/roam"
 keywords = ["agent", "mapping", "distributed", "framework"]
 categories = ["development-tools"]
 
+[lib]
+crate-type = ["rlib", "cdylib"]
+
 [dependencies]
 rusqlite = { version = "0.29", features = ["bundled"] }
 serde = { version = "1.0", features = ["derive"] }
