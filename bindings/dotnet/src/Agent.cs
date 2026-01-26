@@ -1,5 +1,7 @@
 namespace Roam.DotNet;
 
+using System.Runtime.InteropServices;
+
 public class Agent
 {
     public string Id { get; }

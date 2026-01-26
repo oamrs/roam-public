@@ -30,14 +30,22 @@ pub unsafe extern "C" fn oam_free_string(s: *mut c_char) {
 /// `agent_id` must be a valid, null-terminated C string.
 #[no_mangle]
 pub unsafe extern "C" fn oam_agent_connect(agent_id: *const c_char) -> *mut c_char {
-    let c_str = unsafe {
-        assert!(!agent_id.is_null());
-        CStr::from_ptr(agent_id)
+    if agent_id.is_null() {
+        return std::ptr::null_mut();
+    }
+
+    let c_str = unsafe { CStr::from_ptr(agent_id) };
+
+    let r_str = match c_str.to_str() {
+        Ok(s) => s,
+        Err(_) => return std::ptr::null_mut(),
     };
 
-    let r_str = c_str.to_str().unwrap_or("unknown");
     // In real world, this would call the async executor/interceptor logic
     let response = format!("Native: Agent {} connected via FFI", r_str);
 
-    CString::new(response).unwrap().into_raw()
+    match CString::new(response) {
+        Ok(s) => s.into_raw(),
+        Err(_) => std::ptr::null_mut(),
+    }
 }
