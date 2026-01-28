@@ -16,3 +16,12 @@ mod auth_tests;
 
 #[path = "unit/rate_limit_tests.rs"]
 mod rate_limit_tests;
+
+#[path = "unit/seaorm_behavior_test.rs"]
+mod seaorm_behavior_test;
+
+#[path = "unit/mapper_tests.rs"]
+mod mapper_tests;
+
+#[path = "unit/grpc_executor_tests.rs"]
+mod grpc_executor_tests;

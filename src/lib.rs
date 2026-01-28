@@ -1,15 +1,19 @@
 pub mod executor;
 pub mod ffi;
 pub mod generated;
+pub mod grpc_executor;
 pub mod interceptor;
+pub mod mapper;
 pub mod mirror;
 pub mod tcp;
 
 // Re-export commonly used types
 pub use executor::{QueryService, QueryServiceImpl, QueryStatus, SchemaService, SchemaServiceImpl};
+pub use grpc_executor::GrpcExecutor;
 pub use interceptor::{
     get_event_bus, CriticalModelBehavior, CriticalStatusEvent, Event, EventBus, HasCriticalStatus,
 };
+pub use mapper::{GrpcMapper, LocalMapper, Mapper, TcpMapper};
 pub use mirror::{
     introspect_sqlite_path, Column, CompositeForeignKey, ForeignKey, SchemaModel, Table,
 };

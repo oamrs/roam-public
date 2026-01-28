@@ -98,12 +98,26 @@ async fn tcp_server_serves_schema_over_network() {
     let server = JsonRpcServer::new(config).expect("create server");
     let handle = server.start().await.expect("start server");
 
-    tokio::time::sleep(Duration::from_millis(100)).await;
+    // Increased wait time for server initialization when running with other tests
+    tokio::time::sleep(Duration::from_millis(500)).await;
 
-    // Connect client and request schema
-    let client = JsonRpcClient::connect("http://127.0.0.1:50054")
-        .await
-        .expect("create client");
+    // Connect client and request schema (with retry for test parallelization)
+    let mut client = None;
+    for attempt in 0..5 {
+        match JsonRpcClient::connect("http://127.0.0.1:50054").await {
+            Ok(c) => {
+                client = Some(c);
+                break;
+            }
+            Err(_) if attempt < 4 => {
+                tokio::time::sleep(Duration::from_millis(100)).await;
+            }
+            Err(e) => {
+                panic!("create client: {}", e);
+            }
+        }
+    }
+    let client = client.expect("client should be created");
 
     let schema_response = client.get_schema("test_db").await;
     assert!(

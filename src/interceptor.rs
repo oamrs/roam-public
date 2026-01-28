@@ -64,6 +64,13 @@ pub enum Event {
         error_message: String,
         timestamp: String,
     },
+    #[serde(rename = "ModelChanged")]
+    ModelChanged {
+        entity_type: String,
+        entity_id: String,
+        action: String,
+        timestamp: String,
+    },
 }
 
 impl Event {
@@ -164,6 +171,16 @@ impl Event {
         }
     }
 
+    /// Model changed event constructor (for after_save hooks)
+    pub fn model_changed(entity_type: String, entity_id: String, action: String) -> Self {
+        Event::ModelChanged {
+            entity_type,
+            entity_id,
+            action,
+            timestamp: chrono::Utc::now().to_rfc3339(),
+        }
+    }
+
     /// Get the event type as a string
     pub fn event_type(&self) -> &str {
         match self {
@@ -173,6 +190,7 @@ impl Event {
             Event::QueryExecuted { .. } => "QueryExecuted",
             Event::QueryValidationFailed { .. } => "QueryValidationFailed",
             Event::QueryExecutionError { .. } => "QueryExecutionError",
+            Event::ModelChanged { .. } => "ModelChanged",
         }
     }
 
@@ -256,6 +274,17 @@ impl Event {
                 map.insert("db_identifier".to_string(), db_identifier.clone());
                 map.insert("query".to_string(), query.clone());
                 map.insert("error_message".to_string(), error_message.clone());
+                map.insert("timestamp".to_string(), timestamp.clone());
+            }
+            Event::ModelChanged {
+                entity_type,
+                entity_id,
+                action,
+                timestamp,
+            } => {
+                map.insert("entity_type".to_string(), entity_type.clone());
+                map.insert("entity_id".to_string(), entity_id.clone());
+                map.insert("action".to_string(), action.clone());
                 map.insert("timestamp".to_string(), timestamp.clone());
             }
         }
