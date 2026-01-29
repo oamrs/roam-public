@@ -25,3 +25,6 @@ mod mapper_tests;
 
 #[path = "unit/grpc_executor_tests.rs"]
 mod grpc_executor_tests;
+
+#[path = "unit/execution_engine_tests.rs"]
+mod execution_engine_tests;

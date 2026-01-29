@@ -1,3 +1,4 @@
+pub mod execution_engine;
 pub mod executor;
 pub mod ffi;
 pub mod generated;
@@ -8,6 +9,9 @@ pub mod mirror;
 pub mod tcp;
 
 // Re-export commonly used types
+pub use execution_engine::{
+    ConnectionPool, ExecutionEngine, ExecutionMetrics, PoolStats, QueryPriority, QueryRequest,
+};
 pub use executor::{QueryService, QueryServiceImpl, QueryStatus, SchemaService, SchemaServiceImpl};
 pub use grpc_executor::GrpcExecutor;
 pub use interceptor::{
