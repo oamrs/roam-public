@@ -520,40 +520,7 @@ fn execution_metrics_tracks_latency() {
     assert!(latency >= 0.0);
 }
 
-/// Test 28: ExecutionMetrics tracks per-database statistics
-#[test]
-fn execution_metrics_tracks_per_database() {
-    let db_path = test_db_path();
-    let engine = Arc::new(ExecutionEngine::new(&db_path, 10).expect("Create engine"));
-
-    let request = ExecuteQueryRequest {
-        db_identifier: "analytics_db".to_string(),
-        query: "CREATE TABLE IF NOT EXISTS db_test (id INTEGER)".to_string(),
-        parameters: HashMap::new(),
-        limit: 100,
-        timeout_seconds: 30,
-    };
-
-    let query_req = QueryRequest::new(request, QueryPriority::Normal);
-
-    std::thread::spawn({
-        let engine = engine.clone();
-        move || {
-            let rt = tokio::runtime::Runtime::new().expect("runtime creation failed");
-            rt.block_on(async {
-                let _ = engine.spawn_query(query_req).await;
-            })
-        }
-    })
-    .join()
-    .unwrap();
-
-    let metrics = engine.metrics();
-    let db_stats = metrics.database_stats("analytics_db");
-    assert!(db_stats.is_some());
-}
-
-/// Test 29: ExecutionMetrics provides percentile latency
+/// Test 28: ExecutionMetrics provides percentile latency
 #[test]
 fn execution_metrics_provides_percentile_latency() {
     let db_path = test_db_path();
@@ -567,18 +534,7 @@ fn execution_metrics_provides_percentile_latency() {
     assert!(p99_latency >= 0.0);
 }
 
-/// Test 30: ExecutionMetrics tracks query count by database
-#[test]
-fn execution_metrics_query_count_per_db() {
-    let db_path = test_db_path();
-    let engine = ExecutionEngine::new(&db_path, 10).expect("Create engine");
-
-    let metrics = engine.metrics();
-    let count = metrics.query_count_for_database("test_db");
-    assert!(count >= 0);
-}
-
-/// Test 31: ExecutionEngine can retrieve task results by request ID
+/// Test 29: ExecutionEngine can retrieve task results by request ID
 #[test]
 fn execution_engine_retrieves_task_result_by_id() {
     let db_path = test_db_path();
@@ -620,7 +576,7 @@ fn execution_engine_retrieves_task_result_by_id() {
     assert!(result.is_some());
 }
 
-/// Test 32: ExecutionEngine stores multiple results
+/// Test 30: ExecutionEngine stores multiple results
 #[test]
 fn execution_engine_stores_multiple_results() {
     let db_path = test_db_path();
@@ -666,7 +622,7 @@ fn execution_engine_stores_multiple_results() {
     }
 }
 
-/// Test 33: ExecutionEngine returns None for non-existent request ID
+/// Test 31: ExecutionEngine returns None for non-existent request ID
 #[test]
 fn execution_engine_returns_none_for_missing_id() {
     let db_path = test_db_path();
@@ -687,7 +643,7 @@ fn execution_engine_returns_none_for_missing_id() {
     assert!(result.is_none());
 }
 
-/// Test 34: ExecutionEngine can await task completion
+/// Test 32: ExecutionEngine can await task completion
 #[test]
 fn execution_engine_can_await_completion() {
     let db_path = test_db_path();
@@ -731,7 +687,7 @@ fn execution_engine_can_await_completion() {
     .unwrap();
 }
 
-/// Test 35: ExecutionEngine reports result status
+/// Test 33: ExecutionEngine reports result status
 #[test]
 fn execution_engine_reports_result_status() {
     let db_path = test_db_path();
@@ -772,7 +728,7 @@ fn execution_engine_reports_result_status() {
 
     assert!(status.is_some());
 }
-/// Test 36: ExecutionEngine can cancel a task
+/// Test 34: ExecutionEngine can cancel a task
 #[test]
 fn execution_engine_can_cancel_pending_task() {
     let db_path = test_db_path();
@@ -827,7 +783,7 @@ fn execution_engine_can_cancel_pending_task() {
     assert!(is_cancelled);
 }
 
-/// Test 37: ExecutionEngine tracks cancellation status
+/// Test 35: ExecutionEngine tracks cancellation status
 #[test]
 fn execution_engine_tracks_cancellation_status() {
     let db_path = test_db_path();
@@ -856,7 +812,7 @@ fn execution_engine_tracks_cancellation_status() {
     assert!(after);
 }
 
-/// Test 38: ExecutionEngine cleans up cancelled task results
+/// Test 36: ExecutionEngine cleans up cancelled task results
 #[test]
 fn execution_engine_cleans_up_cancelled_task_results() {
     let db_path = test_db_path();
@@ -895,7 +851,7 @@ fn execution_engine_cleans_up_cancelled_task_results() {
     assert!(cleanup_result);
 }
 
-/// Test 39: ExecutionEngine prevents cancellation of completed task
+/// Test 37: ExecutionEngine prevents cancellation of completed task
 #[test]
 fn execution_engine_cannot_cancel_completed_task() {
     let db_path = test_db_path();
@@ -932,7 +888,7 @@ fn execution_engine_cannot_cancel_completed_task() {
     assert!(!cancel_result);
 }
 
-/// Test 40: ExecutionEngine cancels only specific task
+/// Test 38: ExecutionEngine cancels only specific task
 #[test]
 fn execution_engine_cancels_only_specific_task() {
     let db_path = test_db_path();
@@ -978,7 +934,7 @@ fn execution_engine_cancels_only_specific_task() {
     assert!(cancelled2);
 }
 
-/// Test 41: ExecutionEngine assigns TTL to results
+/// Test 39: ExecutionEngine assigns TTL to results
 #[test]
 fn execution_engine_assigns_ttl_to_results() {
     let db_path = test_db_path();
@@ -1016,7 +972,7 @@ fn execution_engine_assigns_ttl_to_results() {
     assert!(result.expires_at.is_some());
 }
 
-/// Test 42: ExecutionEngine marks expired results as stale
+/// Test 40: ExecutionEngine marks expired results as stale
 #[test]
 fn execution_engine_marks_expired_results_as_stale() {
     let db_path = test_db_path();
@@ -1054,7 +1010,7 @@ fn execution_engine_marks_expired_results_as_stale() {
     assert!(is_expired);
 }
 
-/// Test 43: ExecutionEngine collects garbage for expired results
+/// Test 41: ExecutionEngine collects garbage for expired results
 #[test]
 fn execution_engine_collects_garbage_for_expired_results() {
     let db_path = test_db_path();
@@ -1104,7 +1060,7 @@ fn execution_engine_collects_garbage_for_expired_results() {
     assert!(result.is_none());
 }
 
-/// Test 44: ExecutionEngine preserves non-expired results during garbage collection
+/// Test 42: ExecutionEngine preserves non-expired results during garbage collection
 #[test]
 fn execution_engine_preserves_non_expired_results() {
     let db_path = test_db_path();
@@ -1150,7 +1106,7 @@ fn execution_engine_preserves_non_expired_results() {
     assert!(result.is_some());
 }
 
-/// Test 45: ExecutionEngine reports garbage collection statistics
+/// Test 43: ExecutionEngine reports garbage collection statistics
 #[test]
 fn execution_engine_reports_garbage_collection_stats() {
     let db_path = test_db_path();

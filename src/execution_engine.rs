@@ -251,7 +251,6 @@ pub struct ExecutionMetrics {
     db_stats: Arc<tokio::sync::Mutex<HashMap<String, DatabaseStats>>>,
 }
 
-#[allow(dead_code)]
 impl ExecutionMetrics {
     /// Create new metrics tracker
     pub fn new() -> Self {
@@ -307,16 +306,6 @@ impl ExecutionMetrics {
         self.failed_queries.fetch_add(1, Ordering::SeqCst);
     }
 
-    /// Update queue depth
-    pub(crate) fn set_queue_depth(&self, depth: usize) {
-        self.queue_depth.store(depth, Ordering::SeqCst);
-    }
-
-    /// Update active task count
-    pub(crate) fn set_active_tasks(&self, count: usize) {
-        self.active_tasks.store(count, Ordering::SeqCst);
-    }
-
     /// Calculate success rate as percentage (0.0-100.0)
     pub fn success_rate(&self) -> f64 {
         let total = self.total_queries();
@@ -334,45 +323,41 @@ impl ExecutionMetrics {
         if total == 0 {
             0.0
         } else {
-            // This would be properly calculated with latency tracking
-            0.0
+            // Calculate average from total latency and query count
+            if let Ok(total_latency) = self.total_latency_ms.try_lock() {
+                *total_latency / total as f64
+            } else {
+                0.0
+            }
         }
     }
 
     /// Get 95th percentile latency in milliseconds
     pub fn latency_p95_ms(&self) -> f64 {
-        // Placeholder for percentile calculation
-        0.0
+        if let Ok(mut latencies) = self.latencies.try_lock() {
+            if latencies.is_empty() {
+                return 0.0;
+            }
+            latencies.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+            let index = ((0.95 * latencies.len() as f64).ceil() as usize).saturating_sub(1);
+            latencies.get(index).copied().unwrap_or(0.0)
+        } else {
+            0.0
+        }
     }
 
     /// Get 99th percentile latency in milliseconds
     pub fn latency_p99_ms(&self) -> f64 {
-        // Placeholder for percentile calculation
-        0.0
-    }
-
-    /// Get statistics for a specific database
-    pub fn database_stats(&self, db_identifier: &str) -> Option<DatabaseStats> {
-        // For synchronous access, we just check if the database was ever used
-        // Proper implementation would require async access to db_stats mutex
-        // This is a placeholder that returns Some if there were any queries
-        if self.total_queries() > 0 {
-            Some(DatabaseStats {
-                db_identifier: db_identifier.to_string(),
-                total_queries: self.total_queries(),
-                successful_queries: self.successful_queries(),
-                failed_queries: self.failed_queries(),
-                total_latency_ms: 0.0,
-            })
+        if let Ok(mut latencies) = self.latencies.try_lock() {
+            if latencies.is_empty() {
+                return 0.0;
+            }
+            latencies.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+            let index = ((0.99 * latencies.len() as f64).ceil() as usize).saturating_sub(1);
+            latencies.get(index).copied().unwrap_or(0.0)
         } else {
-            None
+            0.0
         }
-    }
-
-    /// Get query count for a specific database
-    pub fn query_count_for_database(&self, _db_identifier: &str) -> u64 {
-        // This would be tracked in db_stats
-        0
     }
 
     /// Record a query latency (called internally)
@@ -403,19 +388,6 @@ impl Default for ExecutionMetrics {
 }
 
 /// High-throughput execution engine for managing concurrent queries
-///
-/// Uses tokio::JoinSet for robust concurrent query execution with:
-/// - Priority-based request queuing
-/// - Graceful task management and cancellation
-/// - Comprehensive metrics tracking
-/// - Connection pooling abstraction
-///
-/// # Example
-/// ```ignore
-/// let engine = ExecutionEngine::new("database.db", 1000)?;
-/// let metrics = engine.metrics();
-/// println!("Active tasks: {}", metrics.active_task_count());
-/// ```
 pub struct ExecutionEngine {
     db_path: String,
     max_concurrent_queries: usize,
@@ -429,15 +401,6 @@ pub struct ExecutionEngine {
 
 impl ExecutionEngine {
     /// Create a new execution engine
-    ///
-    /// # Arguments
-    /// * `db_path` - Path to the SQLite database
-    /// * `max_concurrent_queries` - Maximum number of concurrent queries to allow
-    ///
-    /// # Example
-    /// ```ignore
-    /// let engine = ExecutionEngine::new("database.db", 1000)?;
-    /// ```
     pub fn new(db_path: &str, max_concurrent_queries: usize) -> Result<Self, String> {
         let connection_pool = ConnectionPool::new(db_path, max_concurrent_queries)?;
         Ok(Self {
