@@ -8,22 +8,40 @@ The **roam** crate provides OAM (Object Agent Mapper) core functionality for dis
 
 High-throughput asynchronous execution engine for managing concurrent queries:
 
-- **ExecutionEngine** - Orchestrates concurrent query execution with configurable limits and integrated connection pooling
+- **ExecutionEngine** - Orchestrates concurrent query execution with integrated connection pooling and JoinSet task management
 - **QueryRequest** - Encapsulates requests with priority, unique ID, and timing metadata
 - **QueryPriority** - Four-level priority system (Low, Normal, High, Critical)
-- **ExecutionMetrics** - Lock-free metrics tracking for performance monitoring
+- **ExecutionMetrics** - Advanced metrics tracking with latency histograms and per-database statistics
 - **ConnectionPool** - Async connection pool management for SQLite with configurable limits
 - **PoolStats** - Pool statistics including available/checked-out connection counts
+- **DatabaseStats** - Per-database execution statistics and latency tracking
+- **QueryResult** - Result container with status, output, error, and expiration information
+- **ResultStatus** - Enum tracking pending/completed/failed/cancelled states
+- **CancellationToken** - Task cancellation mechanism with state tracking
 
 Features:
 - Configurable concurrency limits: `ExecutionEngine::new(db_path, max_concurrent_queries)?`
 - Unique request IDs for result tracking via UUID
 - Priority-based request ordering (Critical > High > Normal > Low)
 - Lock-free metrics: total queries, successful/failed counts, queue depth, active tasks
+- Advanced metrics: success rates, latency percentiles (p95, p99), per-database stats
 - Async connection pooling with semaphore-based concurrency control
 - Connection acquisition with automatic release on drop
-- Integrated pool statistics and status tracking
-- Ready for Phase 3: tokio::JoinSet task management
+- Concurrent task execution via tokio::JoinSet with automatic metrics updates
+- Spawn queries asynchronously with `engine.spawn_query(request)` for high-throughput execution
+- Real-time latency tracking and per-database statistics collection
+- Automatic database-specific performance monitoring
+- Result retrieval by request ID: `engine.get_result(request_id).await`
+- Blocking result retrieval with timeout: `engine.wait_for_result(request_id, 5000).await`
+- Result status queries: `engine.result_status(request_id).await`
+- Task cancellation: `engine.cancel_task(request_id).await` prevents completed tasks
+- Cancellation token creation: `engine.create_cancellation_token(request_id).await`
+- Cancellation status checks: `engine.is_task_cancelled(request_id).await`
+- Automatic result cleanup for cancelled tasks
+- Result expiration tracking: Automatic TTL (30ms default) on all results
+- Expiration checks: `engine.is_result_expired(request_id).await`
+- Garbage collection: `engine.garbage_collect_expired_results().await` returns count
+- Result storage metrics: `engine.result_count().await` and `engine.garbage_collected_count().await`
 
 ### roam::executor
 
@@ -200,10 +218,10 @@ cargo test --test unit executor_tests
 ## Test Coverage
 
 **roam-public:**
-- 111 unit tests (executor, mapper, mirror, interceptor, auth, rate limiting, execution_engine)
-  - 19 execution_engine tests (ExecutionEngine, QueryRequest, QueryPriority, Metrics, ConnectionPool)
-- 48 integration tests (gRPC, TCP, executor)
-- Total: 159 tests
+- 137 unit tests (executor, mapper, mirror, interceptor, auth, rate limiting, execution_engine)
+  - 45 execution_engine tests (ExecutionEngine, QueryRequest, QueryPriority, Metrics, ConnectionPool, JoinSet spawning, Enhanced metrics, Task result collection, Task cancellation, Result expiration & garbage collection)
+- 53 integration tests (gRPC, TCP, executor)
+- Total: 190 tests
 
 **roam-schema:**
 - 4 unit tests (LlmSchema macro derive)
@@ -211,16 +229,25 @@ cargo test --test unit executor_tests
 **Backend (services/backend):**
 - 40 unit tests (model creation, validation, schema generation, after-save hooks)
 
-**Total: 203 tests across all crates**
+**Total: 234 tests across all crates**
 
 ## Architecture Highlights
 
-### Asynchronous Execution Engine (Phase 1-2 Complete)
+### Asynchronous Execution Engine (Phase 1-7 Complete)
 - ExecutionEngine for high-throughput concurrent query management
 - QueryPriority system for request ordering (Critical > High > Normal > Low)
 - Lock-free metrics via Arc<Atomic*> for performance
 - Integrated async ConnectionPool with semaphore-based concurrency control
-- Ready for Phase 3: tokio::JoinSet task management
+- tokio::JoinSet task management for concurrent query execution with automatic result collection
+- Advanced metrics: success rates, latency percentiles, per-database statistics
+- Real-time performance monitoring and database-specific insights
+- Result status tracking: Pending → Completed/Failed/Cancelled state machine
+- Synchronous and asynchronous result retrieval with timeout support
+- UUID-based result lookup for distributed task coordination
+- Task cancellation with CancellationToken: prevents cancellation of completed tasks
+- Automatic result cleanup and status marking for cancelled tasks
+- Result expiration with automatic TTL (30ms default) and garbage collection
+- Memory-efficient result storage with automatic cleanup of expired results
 
 ### Distributed Query Execution
 - Single service interface works with local, TCP, or gRPC backends
