@@ -1,7 +1,7 @@
 //! Integration tests for GrpcExecutor with actual gRPC client connections
 //!
 //! These tests verify the end-to-end gRPC server functionality by:
-//! 1. Starting a GrpcExecutor server
+//! 1. Starting a GrpcExecutor server on a dynamic port (0)
 //! 2. Creating gRPC clients (QueryService and SchemaService)
 //! 3. Making RPC calls and verifying responses
 
@@ -22,25 +22,31 @@ fn test_db_path() -> String {
     path.to_string_lossy().to_string()
 }
 
+/// Helper: Find an available port by binding to port 0 and getting the OS-assigned port
+fn get_available_port() -> Result<u16, Box<dyn std::error::Error>> {
+    let listener = std::net::TcpListener::bind("127.0.0.1:0")?;
+    let addr = listener.local_addr()?;
+    Ok(addr.port())
+}
+
 /// Test 1: QueryService::execute_query RPC call succeeds
 #[tokio::test]
 async fn query_service_execute_query_rpc() {
     let db_path = test_db_path();
     let executor = GrpcExecutor::new(&db_path).expect("Failed to create GrpcExecutor");
 
-    // Start server on a random port
+    let port = get_available_port().expect("Failed to get available port");
+    let addr_str = format!("127.0.0.1:{}", port);
+
     let handle = executor
-        .start_server("127.0.0.1:0")
+        .start_server(&addr_str)
         .await
         .expect("Failed to start server");
 
     // Give server time to start binding
     tokio::time::sleep(Duration::from_millis(100)).await;
 
-    // Extract the actual port from the server address
-    // Since we're using port 0, we need to get the actual bound address
-    // For now, we'll use a fixed port for testing
-    let addr = "http://127.0.0.1:50051";
+    let addr = format!("http://127.0.0.1:{}", port);
 
     // Create a client with timeout
     let client_result = tokio::time::timeout(Duration::from_secs(5), async {
@@ -64,14 +70,17 @@ async fn schema_service_get_schema_rpc() {
     let db_path = test_db_path();
     let executor = GrpcExecutor::new(&db_path).expect("Failed to create GrpcExecutor");
 
+    let port = get_available_port().expect("Failed to get available port");
+    let addr_str = format!("127.0.0.1:{}", port);
+
     let handle = executor
-        .start_server("127.0.0.1:0")
+        .start_server(&addr_str)
         .await
         .expect("Failed to start server");
 
     tokio::time::sleep(Duration::from_millis(100)).await;
 
-    let addr = "http://127.0.0.1:50052";
+    let addr = format!("http://127.0.0.1:{}", port);
 
     let client_result = tokio::time::timeout(Duration::from_secs(5), async {
         SchemaServiceClient::connect(addr).await
@@ -92,8 +101,11 @@ async fn grpc_executor_supports_concurrent_calls() {
     let db_path = test_db_path();
     let executor = GrpcExecutor::new(&db_path).expect("Failed to create GrpcExecutor");
 
+    let port = get_available_port().expect("Failed to get available port");
+    let addr_str = format!("127.0.0.1:{}", port);
+
     let handle = executor
-        .start_server("127.0.0.1:0")
+        .start_server(&addr_str)
         .await
         .expect("Failed to start server");
 
@@ -120,8 +132,10 @@ async fn grpc_executor_can_restart() {
 
     // First server
     let executor1 = GrpcExecutor::new(&db_path).expect("Failed to create executor1");
+    let port1 = get_available_port().expect("Failed to get available port");
+    let addr_str1 = format!("127.0.0.1:{}", port1);
     let handle1 = executor1
-        .start_server("127.0.0.1:0")
+        .start_server(&addr_str1)
         .await
         .expect("Failed to start server1");
     tokio::time::sleep(Duration::from_millis(50)).await;
@@ -132,8 +146,10 @@ async fn grpc_executor_can_restart() {
 
     // Second server with same database
     let executor2 = GrpcExecutor::new(&db_path).expect("Failed to create executor2");
+    let port2 = get_available_port().expect("Failed to get available port");
+    let addr_str2 = format!("127.0.0.1:{}", port2);
     let handle2 = executor2
-        .start_server("127.0.0.1:0")
+        .start_server(&addr_str2)
         .await
         .expect("Failed to start server2");
     tokio::time::sleep(Duration::from_millis(50)).await;
@@ -149,12 +165,17 @@ async fn grpc_executor_multiple_servers_different_ports() {
     let executor1 = GrpcExecutor::new(&db_path1).expect("Failed to create executor1");
     let executor2 = GrpcExecutor::new(&db_path2).expect("Failed to create executor2");
 
+    let port1 = get_available_port().expect("Failed to get available port");
+    let addr_str1 = format!("127.0.0.1:{}", port1);
     let handle1 = executor1
-        .start_server("127.0.0.1:0")
+        .start_server(&addr_str1)
         .await
         .expect("Failed to start server1");
+
+    let port2 = get_available_port().expect("Failed to get available port");
+    let addr_str2 = format!("127.0.0.1:{}", port2);
     let handle2 = executor2
-        .start_server("127.0.0.1:0")
+        .start_server(&addr_str2)
         .await
         .expect("Failed to start server2");
 
@@ -170,19 +191,21 @@ async fn query_service_handles_requests() {
     let db_path = test_db_path();
     let executor = GrpcExecutor::new(&db_path).expect("Failed to create GrpcExecutor");
 
+    let port = get_available_port().expect("Failed to get available port");
+    let addr_str = format!("127.0.0.1:{}", port);
+
     let handle = executor
-        .start_server("127.0.0.1:50063")
+        .start_server(&addr_str)
         .await
         .expect("Failed to start server");
 
     tokio::time::sleep(Duration::from_millis(200)).await;
 
+    let addr = format!("http://127.0.0.1:{}", port);
+
     // Attempt to connect and send a request
-    let connect_result = tokio::time::timeout(
-        Duration::from_secs(2),
-        QueryServiceClient::connect("http://127.0.0.1:50063"),
-    )
-    .await;
+    let connect_result =
+        tokio::time::timeout(Duration::from_secs(2), QueryServiceClient::connect(addr)).await;
 
     match connect_result {
         Ok(Ok(mut client)) => {
@@ -216,18 +239,20 @@ async fn schema_service_handles_requests() {
     let db_path = test_db_path();
     let executor = GrpcExecutor::new(&db_path).expect("Failed to create GrpcExecutor");
 
+    let port = get_available_port().expect("Failed to get available port");
+    let addr_str = format!("127.0.0.1:{}", port);
+
     let handle = executor
-        .start_server("127.0.0.1:50064")
+        .start_server(&addr_str)
         .await
         .expect("Failed to start server");
 
     tokio::time::sleep(Duration::from_millis(200)).await;
 
-    let connect_result = tokio::time::timeout(
-        Duration::from_secs(2),
-        SchemaServiceClient::connect("http://127.0.0.1:50064"),
-    )
-    .await;
+    let addr = format!("http://127.0.0.1:{}", port);
+
+    let connect_result =
+        tokio::time::timeout(Duration::from_secs(2), SchemaServiceClient::connect(addr)).await;
 
     match connect_result {
         Ok(Ok(mut client)) => {

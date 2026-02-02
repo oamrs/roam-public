@@ -215,25 +215,9 @@ cargo test --test integration tcp_tests
 cargo test --test unit executor_tests
 ```
 
-## Test Coverage
-
-**roam-public:**
-- 137 unit tests (executor, mapper, mirror, interceptor, auth, rate limiting, execution_engine)
-  - 45 execution_engine tests (ExecutionEngine, QueryRequest, QueryPriority, Metrics, ConnectionPool, JoinSet spawning, Enhanced metrics, Task result collection, Task cancellation, Result expiration & garbage collection)
-- 53 integration tests (gRPC, TCP, executor)
-- Total: 190 tests
-
-**roam-schema:**
-- 4 unit tests (LlmSchema macro derive)
-
-**Backend (services/backend):**
-- 40 unit tests (model creation, validation, schema generation, after-save hooks)
-
-**Total: 234 tests across all crates**
-
 ## Architecture Highlights
 
-### Asynchronous Execution Engine (Phase 1-7 Complete)
+### Asynchronous Execution Engine
 - ExecutionEngine for high-throughput concurrent query management
 - QueryPriority system for request ordering (Critical > High > Normal > Low)
 - Lock-free metrics via Arc<Atomic*> for performance

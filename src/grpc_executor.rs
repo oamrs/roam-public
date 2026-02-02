@@ -8,7 +8,6 @@ use crate::executor::{
     GetTableRequest as ExecGetTableRequest, QueryService, QueryServiceImpl, SchemaService,
     SchemaServiceImpl, ValidateQueryRequest,
 };
-use std::collections::HashMap;
 use std::sync::Arc;
 use tokio::sync::Mutex;
 use tonic::{transport::Server, Request, Response, Status};
@@ -120,7 +119,7 @@ impl ProtoQueryService for GrpcQueryServiceImpl {
         let exec_req = ExecuteQueryRequest {
             db_identifier: req.db_identifier,
             query: req.query,
-            parameters: HashMap::new(),
+            parameters: Default::default(),
             limit: req.limit,
             timeout_seconds: req.timeout_seconds,
         };
@@ -147,7 +146,7 @@ impl ProtoQueryService for GrpcQueryServiceImpl {
         let exec_req = ValidateQueryRequest {
             db_identifier: req.db_identifier,
             query: req.query,
-            parameters: HashMap::new(),
+            parameters: Default::default(),
         };
 
         let service = self.inner.lock().await;

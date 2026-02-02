@@ -10,8 +10,8 @@ pub mod tcp;
 
 // Re-export commonly used types
 pub use execution_engine::{
-    CancellationToken, ConnectionPool, DatabaseStats, ExecutionEngine, ExecutionMetrics, PoolStats,
-    QueryPriority, QueryRequest, QueryResult, ResultStatus,
+    CancellationToken, ConnectionPool, ExecutionEngine, ExecutionMetrics, PoolStats, QueryPriority,
+    QueryRequest, QueryResult, ResultStatus,
 };
 pub use executor::{QueryService, QueryServiceImpl, QueryStatus, SchemaService, SchemaServiceImpl};
 pub use grpc_executor::GrpcExecutor;

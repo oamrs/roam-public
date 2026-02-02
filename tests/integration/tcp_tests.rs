@@ -3,12 +3,20 @@ use oam::tcp::server::{JsonRpcServer, JsonRpcServerConfig};
 use std::time::Duration;
 use tempfile::NamedTempFile;
 
+/// Helper: Find an available port by binding to port 0 and getting the OS-assigned port
+fn get_available_port() -> Result<u16, Box<dyn std::error::Error>> {
+    let listener = std::net::TcpListener::bind("127.0.0.1:0")?;
+    let addr = listener.local_addr()?;
+    Ok(addr.port())
+}
+
 /// Test 1F.1: JsonRpcServer can be created and configured
 #[tokio::test]
 async fn tcp_server_can_be_created() {
+    let port = get_available_port().expect("Failed to get available port");
     let config = JsonRpcServerConfig {
         host: "127.0.0.1".to_string(),
-        port: 50051,
+        port,
         db_path: None,
         auth_provider: None,
         rate_limit_config: None,
@@ -21,9 +29,10 @@ async fn tcp_server_can_be_created() {
 /// Test 1F.2: JsonRpcServer can be started on configured port
 #[tokio::test]
 async fn tcp_server_starts_on_configured_port() {
+    let port = get_available_port().expect("Failed to get available port");
     let config = JsonRpcServerConfig {
         host: "127.0.0.1".to_string(),
-        port: 50052,
+        port,
         db_path: None,
         auth_provider: None,
         rate_limit_config: None,
@@ -37,7 +46,7 @@ async fn tcp_server_starts_on_configured_port() {
     tokio::time::sleep(Duration::from_millis(100)).await;
 
     // Verify server is running by attempting connection
-    let client = JsonRpcClient::connect("http://127.0.0.1:50052").await;
+    let client = JsonRpcClient::connect(&format!("http://127.0.0.1:{}", port)).await;
 
     assert!(
         client.is_ok(),
@@ -51,9 +60,10 @@ async fn tcp_server_starts_on_configured_port() {
 /// Test 1F.3: JsonRpcClient can connect to running JsonRpcServer
 #[tokio::test]
 async fn tcp_client_connects_to_server() {
+    let port = get_available_port().expect("Failed to get available port");
     let config = JsonRpcServerConfig {
         host: "127.0.0.1".to_string(),
-        port: 50053,
+        port,
         db_path: None,
         auth_provider: None,
         rate_limit_config: None,
@@ -64,7 +74,7 @@ async fn tcp_client_connects_to_server() {
 
     tokio::time::sleep(Duration::from_millis(100)).await;
 
-    let client = JsonRpcClient::connect("http://127.0.0.1:50053")
+    let client = JsonRpcClient::connect(&format!("http://127.0.0.1:{}", port))
         .await
         .expect("create client");
 
@@ -87,9 +97,10 @@ async fn tcp_server_serves_schema_over_network() {
     drop(_conn);
 
     // Start server with database
+    let port = get_available_port().expect("Failed to get available port");
     let config = JsonRpcServerConfig {
         host: "127.0.0.1".to_string(),
-        port: 50054,
+        port,
         db_path: Some(db_path.clone()),
         auth_provider: None,
         rate_limit_config: None,
@@ -104,7 +115,7 @@ async fn tcp_server_serves_schema_over_network() {
     // Connect client and request schema (with retry for test parallelization)
     let mut client = None;
     for attempt in 0..5 {
-        match JsonRpcClient::connect("http://127.0.0.1:50054").await {
+        match JsonRpcClient::connect(&format!("http://127.0.0.1:{}", port)).await {
             Ok(c) => {
                 client = Some(c);
                 break;
@@ -160,9 +171,10 @@ async fn tcp_server_executes_query_over_network() {
     drop(_conn);
 
     // Start server
+    let port = get_available_port().expect("Failed to get available port");
     let config = JsonRpcServerConfig {
         host: "127.0.0.1".to_string(),
-        port: 50055,
+        port,
         db_path: Some(db_path),
         auth_provider: None,
         rate_limit_config: None,
@@ -174,7 +186,7 @@ async fn tcp_server_executes_query_over_network() {
     tokio::time::sleep(Duration::from_millis(100)).await;
 
     // Connect and execute query
-    let client = JsonRpcClient::connect("http://127.0.0.1:50055")
+    let client = JsonRpcClient::connect(&format!("http://127.0.0.1:{}", port))
         .await
         .expect("create client");
 
@@ -202,9 +214,10 @@ async fn tcp_server_validates_query_over_network() {
         .expect("create table");
     drop(_conn);
 
+    let port = get_available_port().expect("Failed to get available port");
     let config = JsonRpcServerConfig {
         host: "127.0.0.1".to_string(),
-        port: 50056,
+        port,
         db_path: Some(db_path),
         auth_provider: None,
         rate_limit_config: None,
@@ -215,7 +228,7 @@ async fn tcp_server_validates_query_over_network() {
 
     tokio::time::sleep(Duration::from_millis(100)).await;
 
-    let client = JsonRpcClient::connect("http://127.0.0.1:50056")
+    let client = JsonRpcClient::connect(&format!("http://127.0.0.1:{}", port))
         .await
         .expect("create client");
 
@@ -252,9 +265,10 @@ async fn tcp_server_blocks_injection_over_network() {
         .expect("create table");
     drop(_conn);
 
+    let port = get_available_port().expect("Failed to get available port");
     let config = JsonRpcServerConfig {
         host: "127.0.0.1".to_string(),
-        port: 50057,
+        port,
         db_path: Some(db_path),
         auth_provider: None,
         rate_limit_config: None,
@@ -265,7 +279,7 @@ async fn tcp_server_blocks_injection_over_network() {
 
     tokio::time::sleep(Duration::from_millis(100)).await;
 
-    let client = JsonRpcClient::connect("http://127.0.0.1:50057")
+    let client = JsonRpcClient::connect(&format!("http://127.0.0.1:{}", port))
         .await
         .expect("create client");
 
@@ -305,9 +319,10 @@ async fn tcp_server_handles_concurrent_clients() {
     }
     drop(_conn);
 
+    let port = get_available_port().expect("Failed to get available port");
     let config = JsonRpcServerConfig {
         host: "127.0.0.1".to_string(),
-        port: 50058,
+        port,
         db_path: Some(db_path),
         auth_provider: None,
         rate_limit_config: None,
@@ -320,12 +335,12 @@ async fn tcp_server_handles_concurrent_clients() {
 
     // Create multiple concurrent clients
     let mut handles = vec![];
+    let port_str = format!("http://127.0.0.1:{}", port);
 
     for i in 0..3 {
+        let addr = port_str.clone();
         let handle = tokio::spawn(async move {
-            let client = JsonRpcClient::connect("http://127.0.0.1:50058")
-                .await
-                .expect("create client");
+            let client = JsonRpcClient::connect(&addr).await.expect("create client");
 
             let response = client
                 .execute_query(&format!("db_{}", i), "SELECT * FROM items", 100, 30)
@@ -364,9 +379,10 @@ async fn tcp_server_propagates_execution_events() {
         .expect("insert row");
     drop(_conn);
 
+    let port = get_available_port().expect("Failed to get available port");
     let config = JsonRpcServerConfig {
         host: "127.0.0.1".to_string(),
-        port: 50059,
+        port,
         db_path: Some(db_path),
         auth_provider: None,
         rate_limit_config: None,
@@ -377,7 +393,7 @@ async fn tcp_server_propagates_execution_events() {
 
     tokio::time::sleep(Duration::from_millis(100)).await;
 
-    let client = JsonRpcClient::connect("http://127.0.0.1:50059")
+    let client = JsonRpcClient::connect(&format!("http://127.0.0.1:{}", port))
         .await
         .expect("create client");
 
@@ -396,9 +412,10 @@ async fn tcp_server_propagates_execution_events() {
 /// Test 1F.10: JsonRpcServer can be gracefully shut down
 #[tokio::test]
 async fn tcp_server_graceful_shutdown() {
+    let port = get_available_port().expect("Failed to get available port");
     let config = JsonRpcServerConfig {
         host: "127.0.0.1".to_string(),
-        port: 50060,
+        port,
         db_path: None,
         auth_provider: None,
         rate_limit_config: None,
@@ -410,7 +427,7 @@ async fn tcp_server_graceful_shutdown() {
     tokio::time::sleep(Duration::from_millis(100)).await;
 
     // Verify client can connect
-    let client = JsonRpcClient::connect("http://127.0.0.1:50060")
+    let client = JsonRpcClient::connect(&format!("http://127.0.0.1:{}", port))
         .await
         .expect("create client");
     assert!(client.is_connected(), "Client should be connected");
@@ -422,7 +439,7 @@ async fn tcp_server_graceful_shutdown() {
     tokio::time::sleep(Duration::from_millis(100)).await;
 
     // Verify client cannot connect after shutdown
-    let result = JsonRpcClient::connect("http://127.0.0.1:50060").await;
+    let result = JsonRpcClient::connect(&format!("http://127.0.0.1:{}", port)).await;
     assert!(
         result.is_err(),
         "Client should not be able to connect after shutdown"
@@ -435,9 +452,10 @@ async fn tcp_server_sends_error_on_malformed_json() {
     use serde_json::json;
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
+    let port = get_available_port().expect("Failed to get available port");
     let config = JsonRpcServerConfig {
         host: "127.0.0.1".to_string(),
-        port: 50061,
+        port,
         db_path: None,
         auth_provider: None,
         rate_limit_config: None,
@@ -450,7 +468,7 @@ async fn tcp_server_sends_error_on_malformed_json() {
     tokio::time::sleep(Duration::from_millis(100)).await;
 
     // Connect directly with TCP and send malformed JSON
-    let mut socket = tokio::net::TcpStream::connect("127.0.0.1:50061")
+    let mut socket = tokio::net::TcpStream::connect(&format!("127.0.0.1:{}", port))
         .await
         .expect("connect to server");
 
