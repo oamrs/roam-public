@@ -4,8 +4,6 @@ use oam::interceptor::{
 use once_cell::sync::Lazy;
 use std::sync::Mutex;
 
-/// Global test lock to ensure test isolation for shared EventBus state
-/// Only one test that uses the global EventBus can run at a time
 static TEST_LOCK: Lazy<Mutex<()>> = Lazy::new(|| Mutex::new(()));
 
 /// Helper to acquire test lock during execution
@@ -24,8 +22,6 @@ async fn after_save_hook_dispatches_critical_status_event() {
         timestamp: "2024-01-07T15:30:00Z".to_string(),
     };
 
-    // THEN: The event should be dispatched to the event bus
-    // (In the real implementation, after_save hook will call event_bus.dispatch)
     event_bus.dispatch(event.clone()).unwrap();
 
     let events = event_bus.events().unwrap();
@@ -74,8 +70,6 @@ async fn after_save_hook_ignores_non_critical_status() {
         timestamp: "2024-01-07T15:15:00Z".to_string(),
     };
 
-    // In the real implementation, after_save should filter by status == "CRITICAL"
-    // For now, we test that non-CRITICAL events would be filtered
     if event_warning.status == "CRITICAL" {
         event_bus.dispatch(event_warning.clone()).unwrap();
     }
@@ -99,10 +93,8 @@ async fn model_after_save_hook_integration() {
         timestamp: "2024-01-07T16:00:00Z".to_string(),
     };
 
-    // The after_save hook should automatically dispatch the event
     event_bus.dispatch(event.clone()).unwrap();
 
-    // THEN: The event should be in the global event bus
     let events = event_bus.events().unwrap();
     assert!(
         !events.is_empty(),
@@ -116,7 +108,6 @@ async fn model_after_save_hook_integration() {
 #[tokio::test]
 async fn active_model_behavior_auto_dispatches_critical_on_save() {
     let _lock = _acquire_test_lock();
-    // GIVEN: A mock SeaORM model with CRITICAL status
     get_event_bus().clear().unwrap();
     let model = MockCriticalModel {
         id: 42,
@@ -126,12 +117,10 @@ async fn active_model_behavior_auto_dispatches_critical_on_save() {
         timestamp: "2024-01-08T10:30:00Z".to_string(),
     };
 
-    // WHEN: The model's after_save hook is called (simulating SeaORM save operation)
     let _saved = CriticalModelBehavior::after_save(model, &MockDb::new(), true)
         .await
         .expect("after_save should succeed");
 
-    // THEN: The event should be automatically dispatched to the global bus
     let event_bus = get_event_bus();
     let events = event_bus.events().unwrap();
 
@@ -149,7 +138,6 @@ async fn active_model_behavior_auto_dispatches_critical_on_save() {
 #[tokio::test]
 async fn active_model_behavior_filters_non_critical_status() {
     let _lock = _acquire_test_lock();
-    // GIVEN: A mock model with WARNING (non-CRITICAL) status
     get_event_bus().clear().unwrap();
     let model = MockCriticalModel {
         id: 43,
@@ -159,12 +147,10 @@ async fn active_model_behavior_filters_non_critical_status() {
         timestamp: "2024-01-08T10:35:00Z".to_string(),
     };
 
-    // WHEN: The model's after_save hook is called with non-CRITICAL status
     let _saved = CriticalModelBehavior::after_save(model, &MockDb::new(), true)
         .await
         .expect("after_save should succeed");
 
-    // THEN: The event should NOT be dispatched (no event added to bus)
     let event_bus = get_event_bus();
     let initial_count = event_bus.events().unwrap().len();
 
@@ -180,7 +166,6 @@ async fn active_model_behavior_filters_non_critical_status() {
 #[tokio::test]
 async fn active_model_behavior_sets_event_metadata() {
     let _lock = _acquire_test_lock();
-    // GIVEN: A model with all required fields
     get_event_bus().clear().unwrap();
     let model = MockCriticalModel {
         id: 44,
@@ -190,12 +175,10 @@ async fn active_model_behavior_sets_event_metadata() {
         timestamp: "2024-01-08T10:40:00Z".to_string(),
     };
 
-    // WHEN: The model is saved and hook processes it
     let _saved = CriticalModelBehavior::after_save(model, &MockDb::new(), true)
         .await
         .expect("after_save should succeed");
 
-    // THEN: The dispatched event should preserve all metadata
     let event_bus = get_event_bus();
     let events = event_bus.events().unwrap();
     let last_event = events.last().expect("should have at least one event");

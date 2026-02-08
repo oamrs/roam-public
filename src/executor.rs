@@ -1,26 +1,17 @@
-//! OAM Executor: Query and schema service implementations
-//!
-//! This module provides trait definitions and message types for query execution and schema introspection.
-
 use once_cell::sync::Lazy;
 use rusqlite::Connection;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::sync::Mutex;
 
-/// Connection cache to avoid repeated open/close overhead.
-/// Each database path maintains a single cached connection for efficiency.
 static DB_CONNECTION_CACHE: Lazy<Mutex<HashMap<String, Connection>>> =
     Lazy::new(|| Mutex::new(HashMap::new()));
 
-/// Get or create a cached database connection for the given path.
-/// Connections are reused across queries to avoid expensive open/close cycles.
 fn get_cached_connection(db_path: &str) -> Result<Connection, String> {
     let mut cache = DB_CONNECTION_CACHE
         .lock()
         .map_err(|e| format!("Failed to acquire connection cache lock: {}", e))?;
 
-    // Return existing connection if available
     if let Some(conn) = cache.remove(db_path) {
         if conn.execute_batch("SELECT 1").is_ok() {
             return Ok(conn);
@@ -32,8 +23,6 @@ fn get_cached_connection(db_path: &str) -> Result<Connection, String> {
     Ok(conn)
 }
 
-/// Return a connection to the cache for reuse.
-/// Connections should be returned after use to enable reuse for subsequent queries.
 fn cache_connection(db_path: &str, conn: Connection) -> Result<(), String> {
     let mut cache = DB_CONNECTION_CACHE
         .lock()
@@ -44,14 +33,12 @@ fn cache_connection(db_path: &str, conn: Connection) -> Result<(), String> {
     Ok(())
 }
 
-/// Query parameter for parameterized queries
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct QueryParameter {
     pub value: String,
     pub type_hint: String,
 }
 
-/// Query status enumeration
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[repr(i32)]
 pub enum QueryStatus {
@@ -63,7 +50,6 @@ pub enum QueryStatus {
     Unauthorized = 5,
 }
 
-/// Security check pattern for P2SQL validation
 enum SecurityPattern {
     LineComment,
     BlockComment,
@@ -78,7 +64,6 @@ enum SecurityPattern {
 }
 
 impl SecurityPattern {
-    /// Check if pattern exists in query and return error message
     fn check(&self, query: &str, query_upper: &str) -> Option<String> {
         match self {
             SecurityPattern::LineComment if query.contains("--") => {
@@ -125,7 +110,6 @@ impl SecurityPattern {
     }
 }
 
-/// DML/DDL keyword patterns for read-only enforcement
 #[derive(PartialEq)]
 enum MutationPattern {
     Dml,
@@ -133,7 +117,6 @@ enum MutationPattern {
 }
 
 impl MutationPattern {
-    /// Check if mutation keyword exists in query and return error message
     fn check(&self, query_upper: &str) -> Option<String> {
         match self {
             MutationPattern::Dml
@@ -155,35 +138,25 @@ impl MutationPattern {
     }
 }
 
-/// Schema service trait for database metadata operations
 #[async_trait::async_trait]
 pub trait SchemaService: Send + Sync {
-    /// Get complete database schema
     async fn get_schema(&self, request: GetSchemaRequest) -> Result<GetSchemaResponse, String>;
 
-    /// Get metadata for a specific table
     async fn get_table(&self, request: GetTableRequest) -> Result<GetTableResponse, String>;
 }
 
-/// Query service trait for query validation and execution
 #[async_trait::async_trait]
 pub trait QueryService: Send + Sync {
-    /// Validate a SELECT query without executing it
     async fn validate_query(
         &self,
         request: ValidateQueryRequest,
     ) -> Result<ValidationResponse, String>;
 
-    /// Execute a validated SELECT query
     async fn execute_query(
         &self,
         request: ExecuteQueryRequest,
     ) -> Result<ExecuteQueryResponse, String>;
 }
-
-// ============================================================================
-// REQUEST/RESPONSE MESSAGE TYPES
-// ============================================================================
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct GetSchemaRequest {
@@ -239,7 +212,6 @@ pub struct ExecuteQueryResponse {
     pub timestamp: String,
 }
 
-/// SchemaService implementation
 pub struct SchemaServiceImpl {
     db_path: Option<String>,
 }
@@ -249,7 +221,6 @@ impl SchemaServiceImpl {
         Self { db_path: None }
     }
 
-    /// Set database path for introspection
     pub fn set_db_path(&mut self, db_path: &str) -> Result<(), String> {
         self.db_path = Some(db_path.to_string());
         Ok(())
@@ -311,7 +282,6 @@ impl SchemaService for SchemaServiceImpl {
     }
 }
 
-/// QueryService implementation
 pub struct QueryServiceImpl {
     db_path: Option<String>,
 }
@@ -321,13 +291,11 @@ impl QueryServiceImpl {
         Self { db_path: None }
     }
 
-    /// Set database path for query validation
     pub fn set_db_path(&mut self, db_path: &str) -> Result<(), String> {
         self.db_path = Some(db_path.to_string());
         Ok(())
     }
 
-    /// Run security pattern checks on query
     fn check_security_patterns(query: &str) -> Option<String> {
         let query_upper = query.to_uppercase();
         [
@@ -352,7 +320,6 @@ impl QueryServiceImpl {
             .find_map(|pattern| pattern.check(query_upper))
     }
 
-    /// Build validation error response with event dispatch
     async fn build_validation_error_response(
         &self,
         request: &ExecuteQueryRequest,
@@ -384,7 +351,6 @@ impl QueryServiceImpl {
         })
     }
 
-    /// Build execution error response with event dispatch
     async fn build_execution_error_response(
         &self,
         request: &ExecuteQueryRequest,
@@ -416,7 +382,6 @@ impl QueryServiceImpl {
         })
     }
 
-    /// Build execution response handling success and error cases
     async fn build_execution_response(
         &self,
         request: &ExecuteQueryRequest,
@@ -458,7 +423,6 @@ impl QueryServiceImpl {
         }
     }
 
-    /// Handle execution errors, distinguishing between timeout and other errors
     async fn handle_execution_error(
         &self,
         request: ExecuteQueryRequest,
@@ -478,8 +442,6 @@ impl QueryServiceImpl {
             });
         }
 
-        // Phase 1E: Dispatch QueryExecutionError event
-        // Phase 1E: Dispatch QueryExecutionError event
         let event = Event::query_execution_error(
             request.db_identifier.clone(),
             request.query.clone(),
@@ -666,7 +628,6 @@ impl QueryService for QueryServiceImpl {
     }
 }
 
-/// Async wrapper for query execution with timeout support
 async fn execute_query_on_database_async(
     db_path: &str,
     query: &str,
@@ -706,10 +667,7 @@ fn execute_query_blocking(
 ) -> Result<i64, String> {
     let conn = get_cached_connection(db_path)?;
 
-    // Set busy_timeout for database lock contention
-    // This complements the tokio timeout for execution timeout
     if timeout_seconds > 0 {
-        // Set busy_timeout to a fraction of the total timeout to allow query execution to proceed
         let busy_timeout = std::time::Duration::from_millis(
             (timeout_seconds as u64 * 500) / 1000, // 50% of timeout for lock waits
         );
@@ -717,7 +675,6 @@ fn execute_query_blocking(
             .map_err(|e| format!("Failed to set busy timeout: {}", e))?;
     }
 
-    // Execute query and count rows within a scope to ensure all borrows are dropped
     let result = {
         let mut stmt = conn
             .prepare(query)
@@ -746,7 +703,6 @@ fn execute_query_blocking(
         Ok(row_count)
     };
 
-    // Return connection to cache for reuse
     cache_connection(db_path, conn)?;
 
     result

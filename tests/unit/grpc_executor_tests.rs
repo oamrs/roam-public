@@ -1,12 +1,6 @@
-//! Unit tests for GrpcExecutor
-//!
-//! These tests verify the gRPC server wrapper functionality without
-//! requiring actual gRPC client connections.
-
 use oam::grpc_executor::GrpcExecutor;
 use std::path::PathBuf;
 
-/// Helper: Create a temporary test database path
 fn test_db_path() -> String {
     let mut path = PathBuf::from(std::env::temp_dir());
     path.push("oam_grpc_executor_tests");
@@ -15,7 +9,6 @@ fn test_db_path() -> String {
     path.to_string_lossy().to_string()
 }
 
-/// Test 1: GrpcExecutor can be created with a valid database path
 #[test]
 fn grpc_executor_can_be_created() {
     let db_path = test_db_path();
@@ -26,7 +19,6 @@ fn grpc_executor_can_be_created() {
     );
 }
 
-/// Test 2: GrpcExecutor::new properly initializes query and schema services
 #[test]
 fn grpc_executor_initializes_services() {
     let db_path = test_db_path();
@@ -36,7 +28,6 @@ fn grpc_executor_initializes_services() {
     drop(executor);
 }
 
-/// Test 3: GrpcExecutor::start_server returns a JoinHandle
 #[tokio::test]
 async fn grpc_executor_start_server_returns_handle() {
     let db_path = test_db_path();
@@ -53,7 +44,6 @@ async fn grpc_executor_start_server_returns_handle() {
     drop(handle);
 }
 
-/// Test 4: GrpcExecutor can bind to different addresses
 #[tokio::test]
 async fn grpc_executor_binds_to_specified_address() {
     let db_path = test_db_path();
@@ -68,7 +58,6 @@ async fn grpc_executor_binds_to_specified_address() {
     drop(handle);
 }
 
-/// Test 5: Multiple GrpcExecutor instances can be created independently
 #[tokio::test]
 async fn multiple_grpc_executors_can_coexist() {
     let db_path1 = format!("{}_1", test_db_path());
@@ -91,7 +80,6 @@ async fn multiple_grpc_executors_can_coexist() {
     drop(handle2);
 }
 
-/// Test 6: GrpcExecutor handles invalid database paths gracefully
 #[test]
 fn grpc_executor_handles_invalid_db_path() {
     // Path with non-existent parent directories should still work
@@ -101,7 +89,6 @@ fn grpc_executor_handles_invalid_db_path() {
     // Either succeeds or fails gracefully without panicking
 }
 
-/// Test 7: GrpcExecutor rejects invalid server addresses
 #[tokio::test]
 async fn grpc_executor_rejects_invalid_address() {
     let db_path = test_db_path();

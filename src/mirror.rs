@@ -69,9 +69,7 @@ impl SchemaModel {
         for table in &self.tables {
             let mut col_properties = BTreeMap::new();
             let mut required_cols = BTreeSet::new();
-
             for col in &table.columns {
-                // 1. Map SQL Types to JSON Schema Instance Types
                 let sql_upper = col.sql_type.to_uppercase();
                 let instance_type = if sql_upper.contains("INT") {
                     InstanceType::Integer
@@ -84,7 +82,6 @@ impl SchemaModel {
                 } else if sql_upper.contains("BOOL") {
                     InstanceType::Boolean
                 } else {
-                    // Default to String for TEXT, VARCHAR, DATE, BLOB, etc.
                     InstanceType::String
                 };
 
@@ -93,7 +90,6 @@ impl SchemaModel {
                     ..Default::default()
                 };
 
-                // 2. Inject Enums (Crucial for passing json_schema_reflects_enum_constraints)
                 if let Some(enums) = &col.enum_values {
                     schema_obj.enum_values = Some(
                         enums
@@ -103,7 +99,6 @@ impl SchemaModel {
                     );
                 }
 
-                // 3. Add Metadata (Primary Key info, original SQL type)
                 let mut desc = format!("SQL Type: {}", col.sql_type);
                 if col.primary_key {
                     desc.push_str(" (Primary Key)");
@@ -113,7 +108,6 @@ impl SchemaModel {
                     ..Default::default()
                 }));
 
-                // 4. Handle Nullability
                 if !col.nullable {
                     required_cols.insert(col.name.clone());
                 }
@@ -121,7 +115,6 @@ impl SchemaModel {
                 col_properties.insert(col.name.clone(), Schema::Object(schema_obj));
             }
 
-            // Create the Schema for the Table (representing a Row)
             let table_schema = SchemaObject {
                 instance_type: Some(SingleOrVec::Single(Box::new(InstanceType::Object))),
                 object: Some(Box::new(ObjectValidation {
@@ -139,7 +132,6 @@ impl SchemaModel {
             root_properties.insert(table.name.clone(), Schema::Object(table_schema));
         }
 
-        // Wrap everything in a Root Object
         let root = SchemaObject {
             instance_type: Some(SingleOrVec::Single(Box::new(InstanceType::Object))),
             object: Some(Box::new(ObjectValidation {
@@ -157,7 +149,6 @@ impl SchemaModel {
     }
 }
 
-// Helper: extract enum-like CHECK(...) values for a given column from CREATE SQL.
 fn detect_enum_values(sql_text: &str, col_name: &str) -> Option<Vec<String>> {
     let esc = regex::escape(col_name);
     let pat = format!(r"(?i)CHECK\s*\(\s*{}\s+IN\s*\((?P<vals>[^)]+)\)\s*\)", esc);
@@ -177,9 +168,6 @@ fn detect_enum_values(sql_text: &str, col_name: &str) -> Option<Vec<String>> {
     }
 }
 
-/// Minimal SQLite introspector. This is intentionally tiny and contains a
-/// deliberate inversion bug in the `nullable` detection so the TDD test
-/// will compile but fail for a different reason (assertion about nullability).
 pub fn introspect_sqlite_path(path: &str) -> Result<SchemaModel> {
     let conn = Connection::open(path)?;
 

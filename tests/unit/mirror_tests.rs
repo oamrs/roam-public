@@ -1,14 +1,8 @@
 use rusqlite::Connection;
 use tempfile::NamedTempFile;
 
-/// Integration-style test (placed under `tests/unit/`) that exercises the
-/// `introspect_sqlite_path` API. This test intentionally assumes the
-/// function exists — per TDD we expect the test to fail (compile or run)
-/// until the production code is written.
-
 #[test]
 fn introspect_simple_sqlite_file() {
-    // Create a temporary SQLite file so the introspector can open the same DB file.
     let tmp = NamedTempFile::new().expect("create tmp file");
     let path = tmp.path().to_str().unwrap().to_string();
 
@@ -21,7 +15,6 @@ fn introspect_simple_sqlite_file() {
 
     drop(conn);
 
-    // Call into the library under test and verify the reflected schema.
     let schema = oam::introspect_sqlite_path(&path).expect("introspect");
     assert!(schema.tables.iter().any(|t| t.name == "users"));
     let users = schema
@@ -41,10 +34,8 @@ fn introspect_simple_sqlite_file() {
 
 #[test]
 fn introspect_simple_sqlite_file_err_case() {
-    // Error case: pass a file that is not a valid SQLite database
     let tmp = NamedTempFile::new().expect("create tmp file");
     let path = tmp.path().to_str().unwrap().to_string();
-    // Write arbitrary non-SQLite content
     std::fs::write(&path, b"This is not a SQLite database").expect("write file");
 
     let res = oam::introspect_sqlite_path(&path);

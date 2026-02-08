@@ -1,8 +1,3 @@
-//! Tests for SeaORM behavior pattern and ModelChanged events
-//!
-//! These tests verify the after_save hook pattern that will be implemented
-//! in backend models to dispatch events on save.
-
 use oam::interceptor::Event;
 
 #[test]

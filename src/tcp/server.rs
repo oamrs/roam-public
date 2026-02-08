@@ -1,7 +1,4 @@
 //! JSON-RPC Server Implementation over TCP
-//!
-//! This module provides a JSON-RPC server that exposes QueryService and SchemaService
-//! over TCP with JSON-encoded request/response messages.
 
 use super::auth::AuthProvider;
 use super::rate_limit::{RateLimitConfig, RateLimiter};
@@ -11,7 +8,6 @@ use std::collections::HashMap;
 use std::net::SocketAddr;
 use std::sync::Arc;
 
-/// Configuration for the JSON-RPC server
 #[derive(Clone, Debug)]
 pub struct JsonRpcServerConfig {
     pub host: String,
@@ -21,13 +17,11 @@ pub struct JsonRpcServerConfig {
     pub rate_limit_config: Option<RateLimitConfig>,
 }
 
-/// Handle for controlling a running JSON-RPC server
 pub struct ServerHandle {
     shutdown_tx: tokio::sync::oneshot::Sender<()>,
 }
 
 impl ServerHandle {
-    /// Gracefully stop the server
     pub async fn stop(self) -> Result<(), String> {
         self.shutdown_tx
             .send(())
@@ -36,10 +30,6 @@ impl ServerHandle {
     }
 }
 
-/// JSON-RPC Server for OAM services
-///
-/// Provides QueryService and SchemaService over TCP with JSON-encoded messages.
-/// Implements authentication, rate limiting, and proper error handling.
 pub struct JsonRpcServer {
     config: JsonRpcServerConfig,
     query_service: Arc<QueryServiceImpl>,
@@ -48,7 +38,6 @@ pub struct JsonRpcServer {
 }
 
 impl JsonRpcServer {
-    /// Create a new JSON-RPC server with the given configuration
     pub fn new(config: JsonRpcServerConfig) -> Result<Self, String> {
         let mut query_service = QueryServiceImpl::new();
         let mut schema_service = SchemaServiceImpl::new();
@@ -73,14 +62,12 @@ impl JsonRpcServer {
         })
     }
 
-    /// Parse socket address from config
     fn parse_socket_addr(&self) -> Result<SocketAddr, String> {
         format!("{}:{}", self.config.host, self.config.port)
             .parse::<SocketAddr>()
             .map_err(|e| format!("Failed to parse address: {}", e))
     }
 
-    /// Handle execute_query method
     async fn handle_execute_query(request: &Value, query_service: &Arc<QueryServiceImpl>) -> Value {
         let db = request
             .get("db_identifier")
@@ -119,7 +106,6 @@ impl JsonRpcServer {
         }
     }
 
-    /// Handle get_schema method
     async fn handle_get_schema(
         _request: &Value,
         _schema_service: &Arc<SchemaServiceImpl>,
@@ -131,7 +117,6 @@ impl JsonRpcServer {
         })
     }
 
-    /// Route request to appropriate handler based on method
     async fn route_request(
         request: &Value,
         query_service: &Arc<QueryServiceImpl>,
@@ -191,7 +176,6 @@ impl JsonRpcServer {
         }
     }
 
-    /// Handle a single client connection with authentication and rate limiting
     async fn handle_connection(
         mut socket: tokio::net::TcpStream,
         peer_addr: SocketAddr,
@@ -290,7 +274,6 @@ impl JsonRpcServer {
         }
     }
 
-    /// Start the JSON-RPC server and return a handle
     pub async fn start(self) -> Result<ServerHandle, String> {
         let addr = self.parse_socket_addr()?;
         let (shutdown_tx, mut shutdown_rx) = tokio::sync::oneshot::channel::<()>();

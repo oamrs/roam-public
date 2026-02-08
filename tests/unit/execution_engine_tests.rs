@@ -1,12 +1,3 @@
-//! Unit tests for ExecutionEngine and ConnectionPool - following TDD methodology
-//!
-//! These tests define the behavior of:
-//! - Request queuing and priority handling
-//! - Concurrent task management with JoinSet
-//! - Connection pool integration
-//! - Metrics tracking
-//! - Error handling and resilience
-
 use oam::execution_engine::{
     ConnectionPool, ExecutionEngine, QueryPriority, QueryRequest, ResultStatus,
 };
@@ -24,7 +15,6 @@ fn test_db_path() -> String {
     path.to_string_lossy().to_string()
 }
 
-/// Test 1: ExecutionEngine can be created with default configuration
 #[test]
 fn execution_engine_can_be_created() {
     let db_path = test_db_path();
@@ -33,7 +23,6 @@ fn execution_engine_can_be_created() {
     assert!(result.is_ok(), "ExecutionEngine should be creatable");
 }
 
-/// Test 2: ExecutionEngine stores configuration correctly
 #[test]
 fn execution_engine_stores_configuration() {
     let db_path = test_db_path();
@@ -46,7 +35,6 @@ fn execution_engine_stores_configuration() {
     );
 }
 
-/// Test 3: ExecutionEngine provides metrics access
 #[test]
 fn execution_engine_provides_metrics() {
     let db_path = test_db_path();
@@ -70,7 +58,6 @@ fn execution_engine_provides_metrics() {
     );
 }
 
-/// Test 4: QueryPriority enum exists and can be compared
 #[test]
 fn query_priority_can_be_ordered() {
     assert!(QueryPriority::Critical > QueryPriority::High);
@@ -78,7 +65,6 @@ fn query_priority_can_be_ordered() {
     assert!(QueryPriority::Normal > QueryPriority::Low);
 }
 
-/// Test 5: QueryRequest can be created with unique IDs
 #[test]
 fn query_request_creation() {
     let request = ExecuteQueryRequest {
@@ -99,7 +85,6 @@ fn query_request_creation() {
     );
 }
 
-/// Test 7: ExecutionEngine can be configured with different concurrency limits
 #[test]
 fn execution_engine_respects_concurrency_limit() {
     let db_path = test_db_path();
@@ -111,7 +96,6 @@ fn execution_engine_respects_concurrency_limit() {
     assert_eq!(engine_large.max_concurrent_queries(), 1000);
 }
 
-/// Test 8: Metrics track query counts accurately
 #[test]
 fn metrics_track_query_counts() {
     let db_path = test_db_path();
@@ -123,7 +107,6 @@ fn metrics_track_query_counts() {
     assert_eq!(metrics.failed_queries(), 0);
 }
 
-/// Test 9: ExecutionEngine provides queue depth information
 #[tokio::test]
 async fn execution_engine_provides_queue_depth() {
     let db_path = test_db_path();
@@ -133,7 +116,6 @@ async fn execution_engine_provides_queue_depth() {
     assert_eq!(queue_depth, 0, "Initial queue depth should be 0");
 }
 
-/// Test 10: ExecutionEngine provides active task count
 #[tokio::test]
 async fn execution_engine_provides_active_task_count() {
     let db_path = test_db_path();
@@ -143,21 +125,18 @@ async fn execution_engine_provides_active_task_count() {
     assert_eq!(active_tasks, 0, "Initial active tasks should be 0");
 }
 
-/// Test 11: ConnectionPool can be created
 #[test]
 fn connection_pool_can_be_created() {
     let pool = ConnectionPool::new("memory:", 5);
     assert!(pool.is_ok());
 }
 
-/// Test 12: ConnectionPool stores configuration
 #[test]
 fn connection_pool_stores_configuration() {
     let pool = ConnectionPool::new("memory:", 10).expect("pool creation failed");
     assert_eq!(pool.max_connections(), 10);
 }
 
-/// Test 13: ConnectionPool returns connection
 #[tokio::test]
 async fn connection_pool_returns_connection() {
     let pool = ConnectionPool::new("memory:", 5).expect("pool creation failed");
@@ -166,14 +145,12 @@ async fn connection_pool_returns_connection() {
     assert!(conn_result.is_ok());
 }
 
-/// Test 14: ConnectionPool initializes available connections
 #[test]
 fn connection_pool_initializes_available_connections() {
     let pool = ConnectionPool::new("memory:", 3).expect("pool creation failed");
     assert_eq!(pool.available_connections(), 3);
 }
 
-/// Test 15: ConnectionPool tracks checked out connections
 #[tokio::test]
 async fn connection_pool_tracks_checked_out_connections() {
     let pool = ConnectionPool::new("memory:", 5).expect("pool creation failed");
@@ -183,7 +160,6 @@ async fn connection_pool_tracks_checked_out_connections() {
     assert!(checked_out > 0);
 }
 
-/// Test 16: ConnectionPool respects max connections
 #[tokio::test]
 async fn connection_pool_respects_max_connections() {
     let pool = ConnectionPool::new("memory:", 2).expect("pool creation failed");
@@ -201,7 +177,6 @@ async fn connection_pool_respects_max_connections() {
     assert_eq!(result, 0);
 }
 
-/// Test 17: ConnectionPool provides connection stats
 #[test]
 fn connection_pool_provides_connection_stats() {
     let pool = ConnectionPool::new("memory:", 4).expect("pool creation failed");
@@ -212,7 +187,6 @@ fn connection_pool_provides_connection_stats() {
     assert_eq!(stats.checked_out_connections, 0);
 }
 
-/// Test 18: ConnectionPool executes query
 #[tokio::test]
 async fn connection_pool_executes_query() {
     let pool = ConnectionPool::new("memory:", 1).expect("pool creation failed");
@@ -224,7 +198,6 @@ async fn connection_pool_executes_query() {
     assert!(result.is_ok());
 }
 
-/// Test 19: ConnectionPool releases connection on drop
 #[tokio::test]
 async fn connection_pool_releases_connection_on_drop() {
     let pool = ConnectionPool::new("memory:", 2).expect("pool creation failed");
@@ -239,7 +212,7 @@ async fn connection_pool_releases_connection_on_drop() {
 
     assert_eq!(stats_after.available_connections, 2);
 }
-/// Test 20: ExecutionEngine can spawn a task
+
 #[tokio::test]
 async fn execution_engine_can_spawn_task() {
     let db_path = test_db_path();
@@ -259,7 +232,6 @@ async fn execution_engine_can_spawn_task() {
     assert!(result.is_ok());
 }
 
-/// Test 21: ExecutionEngine spawned task updates metrics
 #[tokio::test]
 async fn execution_engine_spawn_updates_metrics() {
     let db_path = test_db_path();
@@ -282,7 +254,6 @@ async fn execution_engine_spawn_updates_metrics() {
     assert!(metrics_after >= metrics_before);
 }
 
-/// Test 22: ExecutionEngine queues tasks by priority
 #[tokio::test]
 async fn execution_engine_respects_priority_on_spawn() {
     let db_path = test_db_path();
@@ -369,7 +340,6 @@ async fn execution_engine_respects_priority_on_spawn() {
     assert!(req_high.priority() > req_low.priority());
 }
 
-/// Test 23: ExecutionEngine can handle multiple concurrent spawns
 #[tokio::test]
 async fn execution_engine_handles_multiple_spawns() {
     let db_path = test_db_path();
@@ -399,7 +369,6 @@ async fn execution_engine_handles_multiple_spawns() {
     }
 }
 
-/// Test 24: ExecutionEngine tracks active tasks after spawn
 #[tokio::test]
 async fn execution_engine_tracks_active_after_spawn() {
     let db_path = test_db_path();
@@ -423,7 +392,6 @@ async fn execution_engine_tracks_active_after_spawn() {
     assert!(active_after >= active_before);
 }
 
-/// Test 25: ExecutionEngine increments successful queries on successful spawn
 #[tokio::test]
 async fn execution_engine_increments_successful() {
     let db_path = test_db_path();
@@ -445,7 +413,7 @@ async fn execution_engine_increments_successful() {
     let successful_after = engine.metrics().successful_queries();
     assert!(successful_after >= successful_before);
 }
-/// Test 26: ExecutionMetrics can calculate success rate
+
 #[test]
 fn execution_metrics_calculates_success_rate() {
     let db_path = test_db_path();
@@ -455,7 +423,6 @@ fn execution_metrics_calculates_success_rate() {
     assert_eq!(metrics.success_rate(), 0.0);
 }
 
-/// Test 27: ExecutionMetrics tracks query latency
 #[test]
 fn execution_metrics_tracks_latency() {
     let db_path = test_db_path();
@@ -466,7 +433,6 @@ fn execution_metrics_tracks_latency() {
     assert!(latency >= 0.0);
 }
 
-/// Test 28: ExecutionMetrics provides percentile latency
 #[test]
 fn execution_metrics_provides_percentile_latency() {
     let db_path = test_db_path();
@@ -480,7 +446,6 @@ fn execution_metrics_provides_percentile_latency() {
     assert!(p99_latency >= 0.0);
 }
 
-/// Test 29: ExecutionEngine can retrieve task results by request ID
 #[tokio::test]
 async fn execution_engine_retrieves_task_result_by_id() {
     let db_path = test_db_path();
@@ -504,7 +469,6 @@ async fn execution_engine_retrieves_task_result_by_id() {
     assert!(result.is_some());
 }
 
-/// Test 30: ExecutionEngine stores multiple results
 #[tokio::test]
 async fn execution_engine_stores_multiple_results() {
     let db_path = test_db_path();
@@ -533,7 +497,6 @@ async fn execution_engine_stores_multiple_results() {
     }
 }
 
-/// Test 31: ExecutionEngine returns None for non-existent request ID
 #[tokio::test]
 async fn execution_engine_returns_none_for_missing_id() {
     let db_path = test_db_path();
@@ -546,7 +509,6 @@ async fn execution_engine_returns_none_for_missing_id() {
     assert!(result.is_none());
 }
 
-/// Test 32: ExecutionEngine can await task completion
 #[tokio::test]
 async fn execution_engine_can_await_completion() {
     let db_path = test_db_path();
@@ -570,7 +532,6 @@ async fn execution_engine_can_await_completion() {
     assert!(result.is_ok());
 }
 
-/// Test 33: ExecutionEngine reports result status
 #[tokio::test]
 async fn execution_engine_reports_result_status() {
     let db_path = test_db_path();
@@ -593,7 +554,7 @@ async fn execution_engine_reports_result_status() {
 
     assert!(status.is_some());
 }
-/// Test 34: ExecutionEngine can cancel a task
+
 #[tokio::test]
 async fn execution_engine_can_cancel_pending_task() {
     let db_path = test_db_path();
@@ -619,7 +580,6 @@ async fn execution_engine_can_cancel_pending_task() {
     assert!(is_cancelled);
 }
 
-/// Test 35: ExecutionEngine tracks cancellation status
 #[tokio::test]
 async fn execution_engine_tracks_cancellation_status() {
     let db_path = test_db_path();
@@ -635,7 +595,6 @@ async fn execution_engine_tracks_cancellation_status() {
     assert!(is_cancelled_after);
 }
 
-/// Test 36: ExecutionEngine cleans up cancelled task results
 #[tokio::test]
 async fn execution_engine_cleans_up_cancelled_task_results() {
     let db_path = test_db_path();
@@ -656,7 +615,6 @@ async fn execution_engine_cleans_up_cancelled_task_results() {
     assert!(cleanup_result);
 }
 
-/// Test 37: ExecutionEngine prevents cancellation of completed task
 #[tokio::test]
 async fn execution_engine_cannot_cancel_completed_task() {
     let db_path = test_db_path();
@@ -683,8 +641,6 @@ async fn execution_engine_cannot_cancel_completed_task() {
     assert!(!cancel_result);
 }
 
-/// Test 37A: ExecutionEngine cancel_task prevents race condition
-/// Verifies atomic check-and-update prevents completed tasks from being marked cancelled
 #[tokio::test]
 async fn execution_engine_cancel_task_prevents_completion_race() {
     let db_path = test_db_path();
@@ -722,8 +678,6 @@ async fn execution_engine_cancel_task_prevents_completion_race() {
     );
 }
 
-/// Test 37B: ExecutionEngine cancel_task with concurrent record_result
-/// Tests that cancellation and completion don't interfere with each other
 #[tokio::test]
 async fn execution_engine_cancel_vs_completion_race_safety() {
     let db_path = test_db_path();
@@ -788,7 +742,6 @@ async fn execution_engine_cancel_vs_completion_race_safety() {
     }
 }
 
-/// Test 38: ExecutionEngine cancels only specific task
 #[tokio::test]
 async fn execution_engine_cancels_only_specific_task() {
     let db_path = test_db_path();
@@ -809,7 +762,6 @@ async fn execution_engine_cancels_only_specific_task() {
     assert!(cancelled2);
 }
 
-/// Test 39: ExecutionEngine assigns TTL to results
 #[tokio::test]
 async fn execution_engine_assigns_ttl_to_results() {
     let db_path = test_db_path();
@@ -833,7 +785,6 @@ async fn execution_engine_assigns_ttl_to_results() {
     assert!(result.expires_at.is_some());
 }
 
-/// Test 40: ExecutionEngine marks expired results as stale
 #[tokio::test]
 async fn execution_engine_marks_expired_results_as_stale() {
     let db_path = test_db_path();
@@ -857,7 +808,6 @@ async fn execution_engine_marks_expired_results_as_stale() {
     assert!(is_expired);
 }
 
-/// Test 41: ExecutionEngine collects garbage for expired results
 #[tokio::test]
 async fn execution_engine_collects_garbage_for_expired_results() {
     let db_path = test_db_path();
@@ -885,7 +835,6 @@ async fn execution_engine_collects_garbage_for_expired_results() {
     assert!(result.is_none());
 }
 
-/// Test 42: ExecutionEngine preserves non-expired results during garbage collection
 #[tokio::test]
 async fn execution_engine_preserves_non_expired_results() {
     let db_path = test_db_path();
@@ -909,7 +858,6 @@ async fn execution_engine_preserves_non_expired_results() {
     assert!(result.is_some());
 }
 
-/// Test 43: ExecutionEngine reports garbage collection statistics
 #[tokio::test]
 async fn execution_engine_reports_garbage_collection_stats() {
     let db_path = test_db_path();
@@ -944,7 +892,6 @@ async fn execution_engine_reports_garbage_collection_stats() {
     assert_eq!(remaining, 0);
 }
 
-/// Test 44: ExecutionEngine cleans up cancellation tokens during garbage collection
 #[tokio::test]
 async fn execution_engine_cleans_up_cancellation_tokens_on_gc() {
     let db_path = test_db_path();
@@ -983,7 +930,7 @@ async fn execution_engine_cleans_up_cancellation_tokens_on_gc() {
 
     assert!(!result_exists_after);
 }
-/// Test 45: ExecutionEngine respects priority when queueing tasks
+
 #[tokio::test]
 async fn execution_engine_respects_priority_execution_order() {
     let db_path = test_db_path();
@@ -1091,7 +1038,6 @@ async fn execution_engine_respects_priority_execution_order() {
     );
 }
 
-/// Test 46: ExecutionEngine collects all results when all are expired
 #[tokio::test]
 async fn execution_engine_gc_collects_all_expired_results() {
     let db_path = test_db_path();
@@ -1125,7 +1071,6 @@ async fn execution_engine_gc_collects_all_expired_results() {
     }
 }
 
-/// Test 47: ExecutionEngine GC handles mixed expired and non-expired results correctly
 #[tokio::test]
 async fn execution_engine_gc_preserves_non_expired_mixed_with_expired() {
     let db_path = test_db_path();
@@ -1186,7 +1131,6 @@ async fn execution_engine_gc_preserves_non_expired_mixed_with_expired() {
     }
 }
 
-/// Test 48: ExecutionEngine GC with different result statuses (Completed, Failed, Cancelled)
 #[tokio::test]
 async fn execution_engine_gc_respects_all_result_statuses() {
     let db_path = test_db_path();
@@ -1239,7 +1183,6 @@ async fn execution_engine_gc_respects_all_result_statuses() {
     assert_eq!(engine.result_count().await, 0);
 }
 
-/// Test 49: ExecutionEngine GC handles concurrent garbage collection calls safely
 #[tokio::test]
 async fn execution_engine_gc_concurrent_collection_is_safe() {
     let db_path = test_db_path();
@@ -1295,7 +1238,6 @@ async fn execution_engine_gc_concurrent_collection_is_safe() {
     );
 }
 
-/// Test 50: ExecutionEngine GC correctly cleans up tokens for all expired results
 #[tokio::test]
 async fn execution_engine_gc_cleans_tokens_for_multiple_expired_results() {
     let db_path = test_db_path();
@@ -1325,8 +1267,6 @@ async fn execution_engine_gc_cleans_tokens_for_multiple_expired_results() {
     }
 }
 
-/// Test 51: ExecutionEngine quickselect percentile optimization produces accurate results
-/// Tests that the quickselect algorithm correctly computes percentiles by comparing against actual query latencies
 #[tokio::test]
 async fn execution_engine_percentile_calculation_with_queries() {
     let db_path = test_db_path();
@@ -1363,8 +1303,6 @@ async fn execution_engine_percentile_calculation_with_queries() {
     );
 }
 
-/// Test 52: ExecutionEngine percentiles improve with more samples
-/// Verifies that percentile calculations are consistent and use the quickselect optimization
 #[tokio::test]
 async fn execution_engine_percentiles_consistent_across_calls() {
     let db_path = test_db_path();
@@ -1405,7 +1343,6 @@ async fn execution_engine_percentiles_consistent_across_calls() {
     );
 }
 
-/// Test 53: ExecutionEngine handles empty latencies gracefully
 #[tokio::test]
 async fn execution_engine_percentiles_handle_empty_buffer() {
     let db_path = test_db_path();

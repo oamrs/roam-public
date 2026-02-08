@@ -10,10 +10,8 @@ use uuid::Uuid;
 
 use crate::executor::ExecuteQueryRequest;
 
-/// Default TTL for results in milliseconds (30_000ms = 30 seconds)
 const RESULT_TTL_MS: u64 = 30_000;
 
-/// Cancellation token for task cancellation
 #[derive(Debug, Clone)]
 pub struct CancellationToken {
     request_id: Uuid,
@@ -21,7 +19,6 @@ pub struct CancellationToken {
 }
 
 impl CancellationToken {
-    /// Create a new cancellation token
     fn new(request_id: Uuid) -> Self {
         Self {
             request_id,
@@ -29,12 +26,10 @@ impl CancellationToken {
         }
     }
 
-    /// Check if the token is cancelled
     pub fn is_cancelled(&self) -> bool {
         self.is_cancelled.load(std::sync::atomic::Ordering::SeqCst)
     }
 
-    /// Get the request ID associated with this token
     pub fn request_id(&self) -> Uuid {
         self.request_id
     }
@@ -42,7 +37,6 @@ impl CancellationToken {
 
 use std::sync::atomic;
 
-/// Result status for a query execution
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ResultStatus {
     Pending,
@@ -51,7 +45,6 @@ pub enum ResultStatus {
     Cancelled,
 }
 
-/// Query result with status and output
 #[derive(Debug, Clone)]
 pub struct QueryResult {
     pub request_id: Uuid,
@@ -62,7 +55,6 @@ pub struct QueryResult {
     pub expires_at: Option<Instant>,
 }
 
-/// Statistics for connection pool state
 #[derive(Debug, Clone)]
 pub struct PoolStats {
     pub max_connections: usize,
@@ -70,8 +62,6 @@ pub struct PoolStats {
     pub checked_out_connections: usize,
 }
 
-/// RAII guard that holds both a semaphore reference and manages permit ownership
-/// without requiring `permit.forget()`. Uses a simple counter-based approach.
 struct PermitGuard {
     semaphore: Arc<Semaphore>,
 }
@@ -89,12 +79,6 @@ impl Drop for PermitGuard {
     }
 }
 
-/// Async connection wrapper for pooling
-///
-/// Holds both the database connection and a permit guard. When the connection
-/// is dropped, the permit guard's Drop impl automatically returns the permit
-/// to the semaphore, providing safe RAII semantics without manual permit tracking
-/// or fragile forget() calls.
 pub struct PooledConnection {
     conn: Connection,
     // RAII guard that returns the permit when dropped
@@ -102,17 +86,14 @@ pub struct PooledConnection {
 }
 
 impl PooledConnection {
-    /// Execute a query with the connection
     pub fn execute(&self, sql: &str, params: &[&dyn rusqlite::ToSql]) -> rusqlite::Result<usize> {
         self.conn.execute(sql, params)
     }
 
-    /// Execute a simple query that takes no parameters
     pub fn execute_simple(&self, sql: &str) -> rusqlite::Result<usize> {
         self.conn.execute(sql, [])
     }
 
-    /// Query the database with the connection
     pub fn query_row<T, F>(
         &self,
         sql: &str,
@@ -128,7 +109,6 @@ impl PooledConnection {
 
 // Drop is automatic via PermitGuard
 
-/// Async connection pool for managing SQLite connections
 pub struct ConnectionPool {
     db_path: String,
     max_connections: usize,
@@ -136,11 +116,6 @@ pub struct ConnectionPool {
 }
 
 impl ConnectionPool {
-    /// Create a new connection pool
-    ///
-    /// # Arguments
-    /// * `db_path` - Path to SQLite database (e.g., "memory:" or "/path/to/db.sqlite")
-    /// * `max_connections` - Maximum number of concurrent connections
     pub fn new(db_path: &str, max_connections: usize) -> Result<Self, String> {
         Ok(Self {
             db_path: db_path.to_string(),
@@ -149,22 +124,18 @@ impl ConnectionPool {
         })
     }
 
-    /// Get the maximum connections configured
     pub fn max_connections(&self) -> usize {
         self.max_connections
     }
 
-    /// Get available connection slots
     pub fn available_connections(&self) -> usize {
         self.semaphore.available_permits()
     }
 
-    /// Get checked out connection count
     pub fn checked_out_connections(&self) -> usize {
         self.max_connections - self.available_connections()
     }
 
-    /// Get connection pool statistics
     pub fn stats(&self) -> PoolStats {
         PoolStats {
             max_connections: self.max_connections,
@@ -173,12 +144,6 @@ impl ConnectionPool {
         }
     }
 
-    /// Acquire a connection from the pool
-    ///
-    /// Acquires a semaphore permit and wraps it in a PermitGuard. When the
-    /// PooledConnection is dropped, the guard's Drop impl automatically returns
-    /// the permit, eliminating the need for fragile permit.forget() calls and
-    /// providing safe RAII semantics.
     pub async fn get_connection(&self) -> Result<PooledConnection, String> {
         let _permit = self
             .semaphore
@@ -198,7 +163,6 @@ impl ConnectionPool {
         })
     }
 
-    /// Execute a query using a connection from the pool
     pub async fn execute(&self, sql: &str) -> Result<usize, String> {
         let conn = self.get_connection().await?;
         conn.execute_simple(sql)
@@ -206,7 +170,6 @@ impl ConnectionPool {
     }
 }
 
-/// Query priority levels for request ordering
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
 pub enum QueryPriority {
     Low = 0,
@@ -215,7 +178,6 @@ pub enum QueryPriority {
     Critical = 3,
 }
 
-/// Represents a queued query request with metadata
 #[derive(Clone, Debug)]
 pub struct QueryRequest {
     id: Uuid,
@@ -224,7 +186,6 @@ pub struct QueryRequest {
 }
 
 impl QueryRequest {
-    /// Create a new query request with a unique ID
     pub fn new(request: ExecuteQueryRequest, priority: QueryPriority) -> Self {
         Self {
             id: Uuid::new_v4(),
@@ -233,23 +194,19 @@ impl QueryRequest {
         }
     }
 
-    /// Get the unique ID for this request
     pub fn id(&self) -> Uuid {
         self.id
     }
 
-    /// Get the request details
     pub fn request(&self) -> &ExecuteQueryRequest {
         &self.request
     }
 
-    /// Get the priority level
     pub fn priority(&self) -> QueryPriority {
         self.priority
     }
 }
 
-/// Entry in the priority queue for task scheduling
 #[derive(Clone, Debug)]
 struct PriorityQueueEntry {
     query_req: QueryRequest,
@@ -284,8 +241,7 @@ impl PartialEq for PriorityQueueEntry {
 
 impl Eq for PriorityQueueEntry {}
 
-/// Fixed-size circular buffer for bounded latency tracking
-/// Maintains a fixed memory footprint while storing recent query latencies
+// Maintains a fixed memory footprint while storing recent query latencies
 #[derive(Debug, Clone)]
 struct RingBuffer {
     buffer: Vec<f64>,
@@ -295,7 +251,6 @@ struct RingBuffer {
 }
 
 impl RingBuffer {
-    /// Create a new ring buffer with fixed capacity
     fn new(capacity: usize) -> Self {
         Self {
             buffer: vec![0.0; capacity],
@@ -305,7 +260,6 @@ impl RingBuffer {
         }
     }
 
-    /// Add a value to the buffer, overwriting the oldest value if full
     fn push(&mut self, value: f64) {
         self.buffer[self.head] = value;
         self.head = (self.head + 1) % self.capacity;
@@ -314,10 +268,8 @@ impl RingBuffer {
         }
     }
 
-    /// Get a sorted snapshot of all values currently in the buffer
-    ///
-    /// Note: This method is kept for compatibility but percentile calculations now use
-    /// the more efficient quickselect algorithm instead of full sort for O(n) performance.
+    // Note: This method is kept for compatibility but percentile calculations now use
+    // the more efficient quickselect algorithm instead of full sort for O(n) performance.
     #[allow(dead_code)]
     fn sorted_snapshot(&self) -> Vec<f64> {
         if self.count == 0 {
@@ -328,14 +280,12 @@ impl RingBuffer {
         result
     }
 
-    /// Get the number of samples in the buffer
     fn len(&self) -> usize {
         self.count
     }
 
-    /// Get the k-th smallest value using quickselect algorithm
-    /// O(n) average case, much faster than full sort for finding single percentile
-    /// Returns 0.0 if buffer is empty
+    // O(n) average case, much faster than full sort for finding single percentile
+    // Returns 0.0 if buffer is empty
     fn kth_smallest(&self, k: usize) -> f64 {
         if self.count == 0 || k >= self.count {
             return 0.0;
@@ -346,8 +296,8 @@ impl RingBuffer {
         *result
     }
 
-    /// Quickselect helper: finds the k-th smallest element in-place
-    /// Uses partition scheme similar to quicksort but only recurses on the partition containing k
+    // Quickselect helper: finds the k-th smallest element in-place
+    // Uses partition scheme similar to quicksort but only recurses on the partition containing k
     fn quickselect(arr: &mut [f64], left: usize, right: usize, k: usize) -> &f64 {
         if left == right {
             return &arr[left];
@@ -362,7 +312,7 @@ impl RingBuffer {
         }
     }
 
-    /// Partition helper for quickselect: arranges elements so that pivot is in correct position
+    // Partition helper for quickselect: arranges elements so that pivot is in correct position
     fn partition(arr: &mut [f64], left: usize, right: usize) -> usize {
         let pivot = arr[right];
         let mut i = left;
@@ -382,7 +332,6 @@ impl RingBuffer {
     }
 }
 
-/// Execution metrics tracking
 #[derive(Debug, Clone)]
 pub struct ExecutionMetrics {
     total_queries: Arc<AtomicU64>,
@@ -391,12 +340,11 @@ pub struct ExecutionMetrics {
     queue_depth: Arc<AtomicUsize>,
     active_tasks: Arc<AtomicUsize>,
     total_latency_ms: Arc<tokio::sync::Mutex<f64>>,
-    /// Fixed-size circular buffer (10k samples) to prevent unbounded memory growth
+    // Fixed-size circular buffer (10k samples) to prevent unbounded memory growth
     latencies: Arc<tokio::sync::Mutex<RingBuffer>>,
 }
 
 impl ExecutionMetrics {
-    /// Create new metrics tracker
     pub fn new() -> Self {
         Self {
             total_queries: Arc::new(AtomicU64::new(0)),
@@ -410,47 +358,38 @@ impl ExecutionMetrics {
         }
     }
 
-    /// Get total queries processed
     pub fn total_queries(&self) -> u64 {
         self.total_queries.load(Ordering::SeqCst)
     }
 
-    /// Get successful queries
     pub fn successful_queries(&self) -> u64 {
         self.successful_queries.load(Ordering::SeqCst)
     }
 
-    /// Get failed queries
     pub fn failed_queries(&self) -> u64 {
         self.failed_queries.load(Ordering::SeqCst)
     }
 
-    /// Get current queue depth
     pub fn queue_depth(&self) -> usize {
         self.queue_depth.load(Ordering::SeqCst)
     }
 
-    /// Get active task count
     pub fn active_task_count(&self) -> usize {
         self.active_tasks.load(Ordering::SeqCst)
     }
 
-    /// Increment total queries
     pub(crate) fn increment_total(&self) {
         self.total_queries.fetch_add(1, Ordering::SeqCst);
     }
 
-    /// Increment successful queries
     pub(crate) fn increment_successful(&self) {
         self.successful_queries.fetch_add(1, Ordering::SeqCst);
     }
 
-    /// Increment failed queries
     pub(crate) fn increment_failed(&self) {
         self.failed_queries.fetch_add(1, Ordering::SeqCst);
     }
 
-    /// Calculate success rate as percentage (0.0-100.0)
     pub fn success_rate(&self) -> f64 {
         let total = self.total_queries();
         let successful = self.successful_queries();
@@ -461,7 +400,6 @@ impl ExecutionMetrics {
         }
     }
 
-    /// Get average latency in milliseconds
     pub fn average_latency_ms(&self) -> f64 {
         let total = self.total_queries();
         if total == 0 {
@@ -476,10 +414,8 @@ impl ExecutionMetrics {
         }
     }
 
-    /// Get 95th percentile latency in milliseconds
-    ///
-    /// Uses quickselect algorithm for O(n) average-case performance instead of O(n log n) full sort.
-    /// For high-throughput systems with many samples, this is significantly faster.
+    // Uses quickselect algorithm for O(n) average-case performance instead of O(n log n) full sort.
+    // For high-throughput systems with many samples, this is significantly faster.
     pub fn latency_p95_ms(&self) -> f64 {
         if let Ok(latencies) = self.latencies.try_lock() {
             if latencies.len() == 0 {
@@ -493,10 +429,8 @@ impl ExecutionMetrics {
         }
     }
 
-    /// Get 99th percentile latency in milliseconds
-    ///
-    /// Uses quickselect algorithm for O(n) average-case performance instead of O(n log n) full sort.
-    /// For high-throughput systems with many samples, this is significantly faster.
+    // Uses quickselect algorithm for O(n) average-case performance instead of O(n log n) full sort.
+    // For high-throughput systems with many samples, this is significantly faster.
     pub fn latency_p99_ms(&self) -> f64 {
         if let Ok(latencies) = self.latencies.try_lock() {
             if latencies.len() == 0 {
@@ -509,8 +443,7 @@ impl ExecutionMetrics {
             0.0
         }
     }
-    /// Record a query latency (called internally)
-    /// Stores in a fixed-size circular buffer (10k samples) to prevent unbounded memory growth
+    // Stores in a fixed-size circular buffer (10k samples) to prevent unbounded memory growth
     pub(crate) async fn record_latency(&self, _db_identifier: &str, latency_ms: f64) {
         let mut latencies = self.latencies.lock().await;
         latencies.push(latency_ms);
@@ -526,7 +459,6 @@ impl Default for ExecutionMetrics {
     }
 }
 
-/// High-throughput execution engine for managing concurrent queries
 pub struct ExecutionEngine {
     db_path: String,
     max_concurrent_queries: usize,
@@ -539,20 +471,18 @@ pub struct ExecutionEngine {
     garbage_collected_count: Arc<AtomicU64>,
     priority_queue: Arc<tokio::sync::Mutex<BinaryHeap<PriorityQueueEntry>>>,
     sequence_counter: Arc<AtomicU64>,
-    /// Flag to signal cleanup task to stop
+    // Flag to signal cleanup task to stop
     cleanup_task_stopped: Arc<AtomicBool>,
-    /// Notifies waiters when any result status changes (Completed, Failed, Cancelled)
-    /// Avoids busy-wait polling in wait_for_result
+    // Notifies waiters when any result status changes (Completed, Failed, Cancelled)
+    // Avoids busy-wait polling in wait_for_result
     result_ready: Arc<tokio::sync::Notify>,
 }
 
 impl ExecutionEngine {
-    /// Create a new execution engine with default TTL
     pub fn new(db_path: &str, max_concurrent_queries: usize) -> Result<Self, String> {
         Self::with_ttl(db_path, max_concurrent_queries, RESULT_TTL_MS)
     }
 
-    /// Create a new execution engine with custom TTL (in milliseconds)
     pub fn with_ttl(
         db_path: &str,
         max_concurrent_queries: usize,
@@ -605,45 +535,37 @@ impl ExecutionEngine {
         Ok(engine)
     }
 
-    /// Get the database path
     pub fn db_path(&self) -> &str {
         &self.db_path
     }
 
-    /// Get the maximum concurrent queries limit
     pub fn max_concurrent_queries(&self) -> usize {
         self.max_concurrent_queries
     }
 
-    /// Get execution metrics
     pub fn metrics(&self) -> &ExecutionMetrics {
         &self.metrics
     }
 
-    /// Get the connection pool
     pub fn connection_pool(&self) -> &Arc<ConnectionPool> {
         &self.connection_pool
     }
 
-    /// Get current queue depth (number of requests waiting in priority queue)
     pub async fn queue_depth(&self) -> usize {
         self.priority_queue.lock().await.len()
     }
 
-    /// Get current active task count (number of tasks currently executing)
     pub async fn active_task_count(&self) -> usize {
         self.tasks.lock().await.len()
     }
 
-    /// Spawn a query for concurrent execution
-    ///
-    /// Adds the query to the priority queue. The query will be spawned respecting
-    /// the max_concurrent_queries limit. If the concurrency limit is reached, the query
-    /// will remain queued until a slot becomes available.
-    ///
-    /// Note: Actual concurrency is enforced by:
-    /// 1. The process_priority_queue loop that respects max_concurrent_queries
-    /// 2. The ConnectionPool semaphore that limits actual database connections
+    // Adds the query to the priority queue. The query will be spawned respecting
+    // the max_concurrent_queries limit. If the concurrency limit is reached, the query
+    // will remain queued until a slot becomes available.
+    //
+    // Note: Actual concurrency is enforced by:
+    // 1. The process_priority_queue loop that respects max_concurrent_queries
+    // 2. The ConnectionPool semaphore that limits actual database connections
     pub async fn spawn_query(&self, query_req: QueryRequest) -> Result<String, String> {
         self.metrics.increment_total();
         let request_id = query_req.id();
@@ -671,7 +593,6 @@ impl ExecutionEngine {
         Ok(request_id.to_string())
     }
 
-    /// Process the priority queue, spawning tasks while respecting concurrency limits
     async fn process_priority_queue(&self) {
         while self.checked_out_connections() < self.max_concurrent_queries {
             let entry_opt = {
@@ -696,7 +617,6 @@ impl ExecutionEngine {
         }
     }
 
-    /// Spawn a single priority queue entry as a task
     async fn spawn_priority_queue_entry(&self, entry: PriorityQueueEntry) {
         let query_req = entry.query_req;
         let metrics = self.metrics.clone();
@@ -764,15 +684,12 @@ impl ExecutionEngine {
         self.connection_pool.checked_out_connections()
     }
 
-    /// Get result for a specific request ID
     pub async fn get_result(&self, request_id: &Uuid) -> Option<QueryResult> {
         self.results.read().await.get(request_id).cloned()
     }
 
-    /// Wait for a result with timeout (in milliseconds)
-    ///
-    /// Efficiently waits for a result using tokio::sync::Notify instead of polling.
-    /// Notified when task completes, fails, or is cancelled.
+    // Efficiently waits for a result using tokio::sync::Notify instead of polling.
+    // Notified when task completes, fails, or is cancelled.
     pub async fn wait_for_result(
         &self,
         request_id: &Uuid,
@@ -804,12 +721,10 @@ impl ExecutionEngine {
         }
     }
 
-    /// Get result status without blocking
     pub async fn result_status(&self, request_id: &Uuid) -> Option<ResultStatus> {
         self.results.read().await.get(request_id).map(|r| r.status)
     }
 
-    /// Record a query result
     pub async fn record_result(
         &self,
         request_id: Uuid,
@@ -831,7 +746,6 @@ impl ExecutionEngine {
         self.result_ready.notify_one();
     }
 
-    /// Create a cancellation token for a specific task
     pub async fn create_cancellation_token(&self, request_id: &Uuid) -> CancellationToken {
         let token = CancellationToken::new(*request_id);
         self.cancellation_tokens
@@ -841,12 +755,10 @@ impl ExecutionEngine {
         token
     }
 
-    /// Cancel a task by request ID
-    ///
-    /// Uses atomic operations to prevent race conditions:
-    /// 1. Sets the cancellation token flag (non-blocking, idempotent)
-    /// 2. Holds a write lock while checking and updating result status atomically
-    /// 3. This ensures a completed task cannot be marked as cancelled after the final check
+    // Uses atomic operations to prevent race conditions:
+    // 1. Sets the cancellation token flag (non-blocking, idempotent)
+    // 2. Holds a write lock while checking and updating result status atomically
+    // 3. This ensures a completed task cannot be marked as cancelled after the final check
     pub async fn cancel_task(&self, request_id: &Uuid) -> bool {
         // Set cancellation flag first (non-blocking, idempotent)
         let token_exists = {
@@ -905,7 +817,6 @@ impl ExecutionEngine {
         should_notify
     }
 
-    /// Check if a task is cancelled
     pub async fn is_task_cancelled(&self, request_id: &Uuid) -> bool {
         if let Some(token) = self.cancellation_tokens.read().await.get(request_id) {
             return token.is_cancelled();
@@ -913,7 +824,6 @@ impl ExecutionEngine {
         false
     }
 
-    /// Clean up a cancelled result
     pub async fn cleanup_cancelled_result(&self, request_id: &Uuid) -> bool {
         let mut results = self.results.write().await;
         if let Some(result) = results.get(request_id) {
@@ -925,7 +835,6 @@ impl ExecutionEngine {
         false
     }
 
-    /// Check if a result has expired
     pub async fn is_result_expired(&self, request_id: &Uuid) -> bool {
         let results = self.results.read().await;
         if let Some(result) = results.get(request_id) {
@@ -936,7 +845,6 @@ impl ExecutionEngine {
         false
     }
 
-    /// Garbage collect expired results and return count of collected results
     pub async fn garbage_collect_expired_results(&self) -> u64 {
         let now = Instant::now();
         let mut results = self.results.write().await;
@@ -972,18 +880,15 @@ impl ExecutionEngine {
         collected
     }
 
-    /// Get count of stored results
     pub async fn result_count(&self) -> usize {
         self.results.read().await.len()
     }
 
-    /// Get total count of garbage collected results
     pub async fn garbage_collected_count(&self) -> u64 {
         self.garbage_collected_count.load(Ordering::SeqCst)
     }
 }
 
-/// Cleanup implementation to signal background task to stop
 impl Drop for ExecutionEngine {
     fn drop(&mut self) {
         // Signal cleanup task to stop

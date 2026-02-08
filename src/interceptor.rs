@@ -4,7 +4,6 @@ use std::collections::HashMap;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Mutex;
 
-/// Event payload for CRITICAL status changes
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct CriticalStatusEvent {
     pub entity_type: String,
@@ -13,7 +12,6 @@ pub struct CriticalStatusEvent {
     pub timestamp: String,
 }
 
-/// Generalized Event enum supporting multiple event types
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(tag = "event_type")]
 pub enum Event {
@@ -122,7 +120,6 @@ impl Event {
         }
     }
 
-    /// Query execution event constructor
     pub fn query_executed(
         db_identifier: String,
         query: String,
@@ -141,7 +138,6 @@ impl Event {
         }
     }
 
-    /// Query validation failure event constructor
     pub fn query_validation_failed(
         db_identifier: String,
         query: String,
@@ -156,7 +152,6 @@ impl Event {
         }
     }
 
-    /// Query execution error event constructor
     pub fn query_execution_error(
         db_identifier: String,
         query: String,
@@ -171,7 +166,6 @@ impl Event {
         }
     }
 
-    /// Model changed event constructor (for after_save hooks)
     pub fn model_changed(entity_type: String, entity_id: String, action: String) -> Self {
         Event::ModelChanged {
             entity_type,
@@ -181,7 +175,6 @@ impl Event {
         }
     }
 
-    /// Get the event type as a string
     pub fn event_type(&self) -> &str {
         match self {
             Event::StatusChange { .. } => "StatusChange",
@@ -194,7 +187,6 @@ impl Event {
         }
     }
 
-    /// Get event metadata as a HashMap
     pub fn metadata(&self) -> HashMap<String, String> {
         let mut map = HashMap::new();
         map.insert("event_type".to_string(), self.event_type().to_string());
@@ -293,16 +285,12 @@ impl Event {
     }
 }
 
-/// The callback signature for event subscribers
 type SubscriberFn = Box<dyn Fn(&Event) + Send + 'static>;
 
-/// A map of unique IDs to individual subscriber callbacks
 type SubscriberMap = HashMap<usize, SubscriberFn>;
 
-/// A map of event types (as Strings) to a list of interested callbacks
 type TypeSubscriberMap = HashMap<String, Vec<SubscriberFn>>;
 
-/// Global event bus for testing (will be replaced with actual event system)
 pub struct EventBus {
     events: Mutex<Vec<CriticalStatusEvent>>,
     generic_events: Mutex<Vec<Event>>,
@@ -364,7 +352,6 @@ impl EventBus {
             .map(|mut guard| guard.clear())
     }
 
-    /// Dispatch a generic event to the bus
     pub fn dispatch_generic(&self, event: &Event) -> Result<(), String> {
         self.generic_events
             .lock()
@@ -401,7 +388,6 @@ impl EventBus {
         Ok(())
     }
 
-    /// Get all generic events from the bus
     pub fn all_events(&self) -> Result<Vec<Event>, String> {
         self.generic_events
             .lock()
@@ -409,7 +395,6 @@ impl EventBus {
             .map(|guard| guard.clone())
     }
 
-    /// Filter events by type
     pub fn events_by_type(&self, event_type: &str) -> Result<Vec<Event>, String> {
         self.generic_events
             .lock()
@@ -423,7 +408,6 @@ impl EventBus {
             })
     }
 
-    /// Get all persisted events from the log
     pub fn persisted_events(&self) -> Result<Vec<Event>, String> {
         self.persisted_log
             .lock()
@@ -431,7 +415,6 @@ impl EventBus {
             .map(|guard| guard.clone())
     }
 
-    /// Load events from the persistent log
     pub fn load_from_log(&self) -> Result<Vec<Event>, String> {
         self.persisted_log
             .lock()
@@ -439,7 +422,6 @@ impl EventBus {
             .map(|guard| guard.clone())
     }
 
-    /// Register a subscriber callback for all events
     pub fn register_subscriber(
         &self,
         callback: Box<dyn Fn(&Event) + Send + 'static>,
@@ -452,7 +434,6 @@ impl EventBus {
         Ok(subscriber_id)
     }
 
-    /// Unregister a subscriber by ID
     pub fn unregister_subscriber(&self, subscriber_id: usize) -> Result<(), String> {
         self.subscribers
             .lock()
@@ -461,7 +442,6 @@ impl EventBus {
         Ok(())
     }
 
-    /// Register a subscriber callback for a specific event type
     pub fn register_subscriber_for_type(
         &self,
         event_type: &str,
@@ -477,15 +457,12 @@ impl EventBus {
     }
 }
 
-/// Global event bus instance for dispatching critical status events
 static GLOBAL_EVENT_BUS: Lazy<EventBus> = Lazy::new(EventBus::new);
 
-/// Get reference to the global event bus
 pub fn get_event_bus() -> &'static EventBus {
     &GLOBAL_EVENT_BUS
 }
 
-/// Trait for models that support CRITICAL status event interception
 pub trait HasCriticalStatus {
     fn get_status(&self) -> String;
     fn get_entity_type(&self) -> String;
@@ -493,13 +470,9 @@ pub trait HasCriticalStatus {
     fn get_timestamp(&self) -> String;
 }
 
-/// ActiveModelBehavior hook for automatic CRITICAL event dispatch
 pub struct CriticalModelBehavior;
 
 impl CriticalModelBehavior {
-    /// Hook called after a model is saved to the database
-    /// Only dispatches events for models with CRITICAL status.
-    /// Non-CRITICAL statuses are silently ignored.
     pub async fn after_save<M>(
         model: M,
         _db: &impl std::any::Any,

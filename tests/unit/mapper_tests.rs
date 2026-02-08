@@ -1,13 +1,3 @@
-//! Tests for Mapper trait implementations
-//!
-//! These tests verify that all mapper implementations correctly route
-//! requests to their respective backends while maintaining a consistent interface.
-//!
-//! Tests cover:
-//! - LocalMapper creation and operations
-//! - GrpcMapper initialization and error handling
-//! - Mapper trait composition and polymorphism
-
 use oam::executor::{ExecuteQueryRequest, ValidateQueryRequest};
 use oam::grpc_executor::GrpcExecutor;
 use oam::mapper::{GrpcMapper, LocalMapper, Mapper};
@@ -61,7 +51,6 @@ async fn start_test_grpc_server() -> Result<(String, tokio::task::JoinHandle<()>
 
 // === LocalMapper Unit Tests ===
 
-/// Test: LocalMapper can be created with a valid database path
 #[test]
 fn local_mapper_can_be_created() {
     let db_path = get_test_db_path();
@@ -74,7 +63,6 @@ fn local_mapper_can_be_created() {
     let _ = std::fs::remove_file(&db_path);
 }
 
-/// Test: LocalMapper::validate_query returns a response
 #[tokio::test]
 async fn local_mapper_validate_query_returns_response() {
     let db_path = get_test_db_path();
@@ -92,7 +80,6 @@ async fn local_mapper_validate_query_returns_response() {
     let _ = std::fs::remove_file(&db_path);
 }
 
-/// Test: LocalMapper::execute_query returns a response
 #[tokio::test]
 async fn local_mapper_execute_query_returns_response() {
     let db_path = get_test_db_path();
@@ -112,7 +99,6 @@ async fn local_mapper_execute_query_returns_response() {
     let _ = std::fs::remove_file(&db_path);
 }
 
-/// Test: LocalMapper implements Mapper trait
 #[tokio::test]
 async fn local_mapper_implements_trait() {
     let db_path = get_test_db_path();
@@ -132,7 +118,6 @@ async fn local_mapper_implements_trait() {
 
 // === GrpcMapper Unit Tests ===
 
-/// Test: GrpcMapper::new rejects invalid addresses
 #[tokio::test]
 async fn grpc_mapper_rejects_invalid_address() {
     let result = GrpcMapper::new("not-a-valid-url").await;
@@ -142,7 +127,6 @@ async fn grpc_mapper_rejects_invalid_address() {
     );
 }
 
-/// Test: GrpcMapper::new validates address format
 #[tokio::test]
 async fn grpc_mapper_validates_address_format() {
     let result = GrpcMapper::new("http://localhost:50051").await;
@@ -156,7 +140,6 @@ async fn grpc_mapper_validates_address_format() {
     }
 }
 
-/// Test: GrpcMapper connection failure has appropriate error message
 #[tokio::test]
 async fn grpc_mapper_connection_fails_when_server_unavailable() {
     // Use a port that's unlikely to have a running server
@@ -177,7 +160,6 @@ async fn grpc_mapper_connection_fails_when_server_unavailable() {
 
 // === GrpcMapper Successful Operations Tests ===
 
-/// Test: GrpcMapper can successfully validate queries when server is available
 #[tokio::test]
 async fn grpc_mapper_validate_query_with_server() {
     let (server_addr, _handle) = start_test_grpc_server()
@@ -201,7 +183,6 @@ async fn grpc_mapper_validate_query_with_server() {
     );
 }
 
-/// Test: GrpcMapper can successfully execute queries when server is available
 #[tokio::test]
 async fn grpc_mapper_execute_query_with_server() {
     let (server_addr, _handle) = start_test_grpc_server()
@@ -236,7 +217,6 @@ async fn grpc_mapper_execute_query_with_server() {
     );
 }
 
-/// Test: GrpcMapper can execute multiple queries through trait object
 #[tokio::test]
 async fn grpc_mapper_trait_object_with_server() {
     let (server_addr, _handle) = start_test_grpc_server()
@@ -278,7 +258,6 @@ async fn grpc_mapper_trait_object_with_server() {
 
 // === Mapper Trait Composition Tests ===
 
-/// Test: LocalMapper and GrpcMapper both implement Mapper trait
 #[tokio::test]
 async fn mappers_implement_trait() {
     let db_path = get_test_db_path();
@@ -297,7 +276,6 @@ async fn mappers_implement_trait() {
     let _ = std::fs::remove_file(&db_path);
 }
 
-/// Test: Multiple mapper instances can be collected in a vector
 #[tokio::test]
 async fn mappers_are_composable() {
     let db_path = get_test_db_path();
@@ -310,7 +288,6 @@ async fn mappers_are_composable() {
     let _ = std::fs::remove_file(&db_path);
 }
 
-/// Test: Mapper trait enables polymorphism
 #[tokio::test]
 async fn mapper_trait_enables_polymorphism() {
     let db_path = get_test_db_path();

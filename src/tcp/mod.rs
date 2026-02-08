@@ -1,7 +1,4 @@
 //! JSON-RPC Server and Client Implementation
-//!
-//! This module provides JSON-RPC server and client for network-based
-//! communication with the OAM executor services over TCP.
 
 pub mod auth;
 pub mod client;

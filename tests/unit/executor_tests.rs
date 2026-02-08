@@ -1,32 +1,18 @@
-/// Executor module tests - Phase 1A: gRPC Infrastructure
-///
-/// These tests follow strict TDD discipline:
-/// 1. Write failing tests for desired functionality
-/// 2. Implement minimal production code to pass tests
-/// 3. Refactor for quality
-///
-/// Phase 1A focuses on gRPC service definitions and basic infrastructure.
-/// Phase 1B will add schema introspection, validation, and P2SQL security.
 use oam::executor::{QueryService, QueryServiceImpl, SchemaService, SchemaServiceImpl};
 use oam::generated::{
     ExecuteQueryRequest, GetSchemaRequest, GetTableRequest, QueryStatus, ValidateQueryRequest,
 };
 
-/// Test 1A.1: SchemaService can be instantiated
 #[tokio::test]
 async fn schema_service_can_be_created() {
     let _service = SchemaServiceImpl::new();
-    // If this compiles and runs, SchemaServiceImpl exists
 }
 
-/// Test 1A.2: QueryService can be instantiated
 #[tokio::test]
 async fn query_service_can_be_created() {
     let _service = QueryServiceImpl::new();
-    // If this compiles and runs, QueryServiceImpl exists
 }
 
-/// Test 1A.3: SchemaService::get_schema returns SchemaResponse with correct structure
 #[tokio::test]
 async fn schema_service_get_schema_returns_response() {
     let service = SchemaServiceImpl::new();
@@ -52,7 +38,6 @@ async fn schema_service_get_schema_returns_response() {
     );
 }
 
-/// Test 1A.4: SchemaService::get_table returns TableResponse with correct structure
 #[tokio::test]
 async fn schema_service_get_table_returns_response() {
     let service = SchemaServiceImpl::new();
@@ -71,7 +56,6 @@ async fn schema_service_get_table_returns_response() {
     );
 }
 
-/// Test 1A.5: QueryService::validate_query returns ValidationResponse
 #[tokio::test]
 async fn query_service_validate_query_returns_response() {
     let service = QueryServiceImpl::new();
@@ -92,7 +76,6 @@ async fn query_service_validate_query_returns_response() {
     );
 }
 
-/// Test 1A.6: QueryService::execute_query returns QueryResponse with status
 #[tokio::test]
 async fn query_service_execute_query_returns_response() {
     let service = QueryServiceImpl::new();
@@ -115,7 +98,6 @@ async fn query_service_execute_query_returns_response() {
     );
 }
 
-/// Test 1A.7: Multiple schema requests with different db_identifiers work independently
 #[tokio::test]
 async fn schema_service_handles_multiple_databases() {
     let service = SchemaServiceImpl::new();
@@ -133,14 +115,13 @@ async fn schema_service_handles_multiple_databases() {
     // Both should return valid responses
     assert!(!resp1.schema_id.is_empty());
     assert!(!resp2.schema_id.is_empty());
-    // Schema IDs should be different (unique per request in Phase 1A)
+    // Schema IDs should be different (unique per request)
     assert_ne!(
         resp1.schema_id, resp2.schema_id,
         "Different requests should have different schema IDs"
     );
 }
 
-/// Test 1A.8: Query validation can accept queries with parameters
 #[tokio::test]
 async fn query_service_validate_query_with_parameters() {
     let service = QueryServiceImpl::new();
@@ -167,7 +148,6 @@ async fn query_service_validate_query_with_parameters() {
     );
 }
 
-/// Test 1A.9: Query execution returns correct QueryStatus enum values
 #[tokio::test]
 async fn query_service_returns_valid_status_codes() {
     let service = QueryServiceImpl::new();
@@ -198,7 +178,6 @@ async fn query_service_returns_valid_status_codes() {
     );
 }
 
-/// Test 1A.10: Services implement Send + Sync for concurrent use
 #[test]
 fn services_are_send_sync() {
     fn assert_send_sync<T: Send + Sync>() {}
@@ -207,11 +186,6 @@ fn services_are_send_sync() {
     assert_send_sync::<QueryServiceImpl>();
 }
 
-// ============================================================================
-// PHASE 1D: Query Execution Tests (Unit - No Database)
-// ============================================================================
-
-/// Test 1D.1: QueryService::execute_query returns response with correct structure
 #[tokio::test]
 async fn query_service_execute_query_returns_structured_response() {
     let service = QueryServiceImpl::new();
@@ -236,7 +210,6 @@ async fn query_service_execute_query_returns_structured_response() {
     );
 }
 
-/// Test 1D.2: QueryService::execute_query without db_path returns ExecutionError
 #[tokio::test]
 async fn query_service_execute_query_without_db_path_returns_error() {
     let service = QueryServiceImpl::new();
@@ -264,7 +237,6 @@ async fn query_service_execute_query_without_db_path_returns_error() {
     );
 }
 
-/// Test 1D.3: QueryService::execute_query validates query before execution
 #[tokio::test]
 async fn query_service_execute_query_validates_before_execution() {
     let service = QueryServiceImpl::new();
@@ -290,7 +262,6 @@ async fn query_service_execute_query_validates_before_execution() {
     );
 }
 
-/// Test 1D.4: QueryService::execute_query respects timeout parameter
 #[tokio::test]
 async fn query_service_execute_query_timeout_parameter_processed() {
     let service = QueryServiceImpl::new();
@@ -310,7 +281,6 @@ async fn query_service_execute_query_timeout_parameter_processed() {
     assert!(response.status >= 0, "status should be valid");
 }
 
-/// Test 1D.5: QueryService::execute_query respects limit parameter
 #[tokio::test]
 async fn query_service_execute_query_limit_parameter_processed() {
     let service = QueryServiceImpl::new();
@@ -333,11 +303,6 @@ async fn query_service_execute_query_limit_parameter_processed() {
     );
 }
 
-// ============================================================================
-// PHASE 1E: EVENT DISPATCH TESTS (Unit - No Database Required)
-// ============================================================================
-
-/// Test 1E.1: QueryValidationFailed event dispatched on security pattern detection
 #[tokio::test]
 async fn query_service_dispatches_validation_failed_on_command_chaining() {
     use oam::interceptor::get_event_bus;
@@ -395,7 +360,6 @@ async fn query_service_dispatches_validation_failed_on_command_chaining() {
     }
 }
 
-/// Test 1E.2: QueryValidationFailed event includes db_identifier and error reason
 #[tokio::test]
 async fn query_service_validation_failed_event_includes_metadata() {
     use oam::interceptor::get_event_bus;
@@ -449,7 +413,6 @@ async fn query_service_validation_failed_event_includes_metadata() {
     );
 }
 
-/// Test 1E.3: QueryExecutionError event dispatched when database path not configured
 #[tokio::test]
 async fn query_service_dispatches_execution_error_on_missing_db_path() {
     use oam::interceptor::get_event_bus;
@@ -511,7 +474,6 @@ async fn query_service_dispatches_execution_error_on_missing_db_path() {
     }
 }
 
-/// Test 1E.4: QueryExecutionError event includes query and error details
 #[tokio::test]
 async fn query_service_execution_error_event_includes_query_details() {
     use oam::interceptor::get_event_bus;
@@ -564,7 +526,6 @@ async fn query_service_execution_error_event_includes_query_details() {
     }
 }
 
-/// Test 1E.5: Different security violations dispatch appropriate events
 #[tokio::test]
 async fn query_service_different_violations_dispatch_correct_events() {
     use oam::interceptor::get_event_bus;
@@ -576,7 +537,6 @@ async fn query_service_different_violations_dispatch_correct_events() {
     let service = QueryServiceImpl::new();
     let test_db_id = "1e5_violation_test".to_string();
 
-    // Test 1: Line comment violation
     let request1 = ExecuteQueryRequest {
         db_identifier: test_db_id.clone(),
         query: "SELECT * FROM users -- comment".to_string(),
@@ -587,7 +547,6 @@ async fn query_service_different_violations_dispatch_correct_events() {
 
     let _result1 = service.execute_query(request1).await;
 
-    // Test 2: PRAGMA violation
     let request2 = ExecuteQueryRequest {
         db_identifier: test_db_id.clone(),
         query: "PRAGMA table_info(users)".to_string(),

@@ -1,16 +1,9 @@
 use oam::executor::{QueryService, QueryServiceImpl, SchemaService, SchemaServiceImpl};
 use oam::generated::{GetSchemaRequest, GetTableRequest, ValidateQueryRequest};
-
-// ============================================================================
-// PHASE 1B: Database Integration Tests
-// ============================================================================
-
 use tempfile::NamedTempFile;
 
-/// Test 1B.1: QueryService rejects queries against non-existent tables
 #[tokio::test]
 async fn query_service_rejects_nonexistent_table() {
-    // GIVEN: A temp SQLite database with only a 'users' table
     let tmp = NamedTempFile::new().expect("create tmp file");
     let db_path = tmp.path().to_str().unwrap();
 
@@ -23,11 +16,9 @@ async fn query_service_rejects_nonexistent_table() {
         .expect("create table");
     drop(_conn);
 
-    // Create a QueryServiceImpl and set database path
     let mut validator = QueryServiceImpl::new();
     validator.set_db_path(db_path).expect("set db path");
 
-    // WHEN: We validate a query against a non-existent table
     let request = ValidateQueryRequest {
         db_identifier: "test".to_string(),
         query: "SELECT * FROM nonexistent_table".to_string(),
@@ -35,8 +26,6 @@ async fn query_service_rejects_nonexistent_table() {
     };
 
     let result = validator.validate_query(request).await;
-
-    // THEN: Validation should fail with table not found error
     assert!(result.is_ok());
     let response = result.unwrap();
     assert!(!response.valid, "Query should be invalid");
@@ -46,10 +35,8 @@ async fn query_service_rejects_nonexistent_table() {
     );
 }
 
-/// Test 1B.2: QueryService accepts valid SELECT queries against existing tables
 #[tokio::test]
 async fn query_service_accepts_valid_select_query() {
-    // GIVEN: A temp SQLite database with a users table
     let tmp = NamedTempFile::new().expect("create tmp file");
     let db_path = tmp.path().to_str().unwrap();
 
@@ -62,11 +49,9 @@ async fn query_service_accepts_valid_select_query() {
         .expect("create table");
     drop(_conn);
 
-    // Create a QueryServiceImpl and set database path
     let mut validator = QueryServiceImpl::new();
     validator.set_db_path(db_path).expect("set db path");
 
-    // WHEN: We validate a valid SELECT query against existing table
     let request = ValidateQueryRequest {
         db_identifier: "test".to_string(),
         query: "SELECT * FROM users".to_string(),
@@ -74,8 +59,6 @@ async fn query_service_accepts_valid_select_query() {
     };
 
     let result = validator.validate_query(request).await;
-
-    // THEN: Validation should succeed
     assert!(result.is_ok());
     let response = result.unwrap();
     assert!(response.valid, "Valid query should pass validation");
@@ -85,7 +68,6 @@ async fn query_service_accepts_valid_select_query() {
     );
 }
 
-/// Test 1B.3: QueryService rejects DDL statements (CREATE)
 #[tokio::test]
 async fn query_service_rejects_ddl_create() {
     let tmp = NamedTempFile::new().expect("create tmp file");
@@ -112,7 +94,6 @@ async fn query_service_rejects_ddl_create() {
     );
 }
 
-/// Test 1B.4: QueryService rejects DML statements (INSERT)
 #[tokio::test]
 async fn query_service_rejects_dml_insert() {
     let tmp = NamedTempFile::new().expect("create tmp file");
@@ -139,7 +120,6 @@ async fn query_service_rejects_dml_insert() {
     );
 }
 
-/// Test 1B.5: SchemaService returns schema for introspected database
 #[tokio::test]
 async fn schema_service_introspects_sqlite_tables() {
     let tmp = NamedTempFile::new().expect("create tmp file");
@@ -171,7 +151,6 @@ async fn schema_service_introspects_sqlite_tables() {
     assert_eq!(response.database_type, "SQLite");
 }
 
-/// Test 1B.6: SchemaService validates table existence
 #[tokio::test]
 async fn schema_service_retrieves_table_columns() {
     let tmp = NamedTempFile::new().expect("create tmp file");
@@ -198,7 +177,6 @@ async fn schema_service_retrieves_table_columns() {
     assert!(result.is_ok(), "Should retrieve existing table");
 }
 
-/// Test 1B.7: SchemaService rejects non-existent tables
 #[tokio::test]
 async fn schema_service_rejects_nonexistent_table() {
     let tmp = NamedTempFile::new().expect("create tmp file");
@@ -222,7 +200,6 @@ async fn schema_service_rejects_nonexistent_table() {
     assert!(result.is_err(), "Should reject non-existent table");
 }
 
-/// Test 1B.8: QueryService supports parameterized queries
 #[tokio::test]
 async fn query_service_validates_parameterized_query() {
     let tmp = NamedTempFile::new().expect("create tmp file");
@@ -261,7 +238,6 @@ async fn query_service_validates_parameterized_query() {
     assert!(response.valid, "Parameterized query should validate");
 }
 
-/// Test 1B.9: QueryService rejects queries without FROM clause
 #[tokio::test]
 async fn query_service_rejects_query_without_from() {
     let tmp = NamedTempFile::new().expect("create tmp file");
@@ -285,7 +261,6 @@ async fn query_service_rejects_query_without_from() {
     assert!(response.error_message.contains("FROM"));
 }
 
-/// Test 1B.10: QueryService validates against schema with foreign keys
 #[tokio::test]
 async fn query_service_validates_foreign_key_tables() {
     let tmp = NamedTempFile::new().expect("create tmp file");
@@ -317,11 +292,6 @@ async fn query_service_validates_foreign_key_tables() {
     assert!(response.valid, "Valid FK query should pass");
 }
 
-// ============================================================================
-// PHASE 1C: P2SQL Security - Prompt Injection Defense
-// ============================================================================
-
-/// Test 1C.1: QueryService rejects queries with semicolons (command chaining)
 #[tokio::test]
 async fn query_service_rejects_command_chaining_semicolon() {
     let tmp = NamedTempFile::new().expect("create tmp file");
@@ -353,7 +323,6 @@ async fn query_service_rejects_command_chaining_semicolon() {
     );
 }
 
-/// Test 1C.2: QueryService rejects queries with SQL line comments (--)
 #[tokio::test]
 async fn query_service_rejects_line_comments() {
     let tmp = NamedTempFile::new().expect("create tmp file");
@@ -388,7 +357,6 @@ async fn query_service_rejects_line_comments() {
     );
 }
 
-/// Test 1C.3: QueryService rejects queries with block comments (/* */)
 #[tokio::test]
 async fn query_service_rejects_block_comments() {
     let tmp = NamedTempFile::new().expect("create tmp file");
@@ -423,7 +391,6 @@ async fn query_service_rejects_block_comments() {
     );
 }
 
-/// Test 1C.4: QueryService rejects PRAGMA statements
 #[tokio::test]
 async fn query_service_rejects_pragma_statements() {
     let tmp = NamedTempFile::new().expect("create tmp file");
@@ -454,7 +421,6 @@ async fn query_service_rejects_pragma_statements() {
     );
 }
 
-/// Test 1C.5: QueryService rejects EXPLAIN statements
 #[tokio::test]
 async fn query_service_rejects_explain_statements() {
     let tmp = NamedTempFile::new().expect("create tmp file");
@@ -485,7 +451,6 @@ async fn query_service_rejects_explain_statements() {
     );
 }
 
-/// Test 1C.6: QueryService rejects boolean-based SQL injection (OR '1'='1)
 #[tokio::test]
 async fn query_service_rejects_boolean_injection() {
     let tmp = NamedTempFile::new().expect("create tmp file");
@@ -517,7 +482,6 @@ async fn query_service_rejects_boolean_injection() {
     );
 }
 
-/// Test 1C.7: QueryService rejects UNION-based injection (UNION SELECT)
 #[tokio::test]
 async fn query_service_rejects_union_injection() {
     let tmp = NamedTempFile::new().expect("create tmp file");
@@ -549,7 +513,6 @@ async fn query_service_rejects_union_injection() {
     );
 }
 
-/// Test 1C.8: QueryService rejects time-based blind injection (SLEEP)
 #[tokio::test]
 async fn query_service_rejects_sleep_injection() {
     let tmp = NamedTempFile::new().expect("create tmp file");
@@ -581,7 +544,6 @@ async fn query_service_rejects_sleep_injection() {
     );
 }
 
-/// Test 1C.9: QueryService rejects subquery injection in WHERE clause
 #[tokio::test]
 async fn query_service_rejects_subquery_injection() {
     let tmp = NamedTempFile::new().expect("create tmp file");
@@ -612,8 +574,6 @@ async fn query_service_rejects_subquery_injection() {
         "Error should mention subquery or injection"
     );
 }
-
-/// Test 1C.10: QueryService rejects ATTACH/DETACH database attacks
 #[tokio::test]
 async fn query_service_rejects_attach_database() {
     let tmp = NamedTempFile::new().expect("create tmp file");
@@ -645,13 +605,8 @@ async fn query_service_rejects_attach_database() {
     );
 }
 
-// ============================================================================
-// PHASE 1D: Query Execution Tests (Integration - With Database)
-// ============================================================================
-
 use oam::generated::ExecuteQueryRequest;
 
-/// Test 1D.6: QueryService executes valid SELECT query and returns rows
 #[tokio::test]
 async fn query_service_executes_select_and_returns_row_count() {
     let tmp = NamedTempFile::new().expect("create tmp file");
@@ -699,7 +654,6 @@ async fn query_service_executes_select_and_returns_row_count() {
     );
 }
 
-/// Test 1D.7: QueryService respects row limit in result set
 #[tokio::test]
 async fn query_service_respects_limit_parameter() {
     let tmp = NamedTempFile::new().expect("create tmp file");
@@ -746,7 +700,6 @@ async fn query_service_respects_limit_parameter() {
     );
 }
 
-/// Test 1D.8: QueryService rejects invalid queries with ValidationError
 #[tokio::test]
 async fn query_service_rejects_invalid_query_with_validation_error() {
     let tmp = NamedTempFile::new().expect("create tmp file");
@@ -784,7 +737,6 @@ async fn query_service_rejects_invalid_query_with_validation_error() {
     );
 }
 
-/// Test 1D.9: QueryService returns ExecutionError for non-existent table
 #[tokio::test]
 async fn query_service_returns_execution_error_for_nonexistent_table() {
     let tmp = NamedTempFile::new().expect("create tmp file");
@@ -823,7 +775,6 @@ async fn query_service_returns_execution_error_for_nonexistent_table() {
     );
 }
 
-/// Test 1D.10: QueryService executes parameterized query with substitution
 #[tokio::test]
 async fn query_service_executes_parameterized_query() {
     let tmp = NamedTempFile::new().expect("create tmp file");
@@ -856,11 +807,9 @@ async fn query_service_executes_parameterized_query() {
         },
     );
 
-    // Phase 1D: Parameters are accepted but not yet bound (that's Phase 1E)
-    // This test verifies the query executes; parameter substitution will be tested in Phase 1E
     let request = ExecuteQueryRequest {
         db_identifier: "test".to_string(),
-        query: "SELECT * FROM users".to_string(), // Simple query without WHERE for Phase 1D
+        query: "SELECT * FROM users".to_string(),
         parameters: params,
         limit: 100,
         timeout_seconds: 30,
@@ -871,17 +820,11 @@ async fn query_service_executes_parameterized_query() {
     let response = result.unwrap();
 
     assert_eq!(response.status, oam::generated::QueryStatus::Success as i32);
-    assert_eq!(
-        response.row_count, 2,
-        "Should return all users (Phase 1D doesn't bind parameters yet)"
-    );
+    assert_eq!(response.row_count, 2, "Should return all users");
 }
 
 // ============================================================================
-// PHASE 1E: EVENT INTEGRATION TESTS (With Database)
-// ============================================================================
 
-/// Test 1E.1: QueryService dispatches QueryExecuted event when query succeeds with database
 #[tokio::test]
 async fn query_service_dispatches_query_executed_event_on_db_success() {
     use oam::interceptor::get_event_bus;
@@ -958,7 +901,6 @@ async fn query_service_dispatches_query_executed_event_on_db_success() {
     }
 }
 
-/// Test 1E.2: QueryService dispatches QueryValidationFailed event when validation fails with database
 #[tokio::test]
 async fn query_service_dispatches_query_validation_failed_event_on_db_validation_failure() {
     use oam::interceptor::get_event_bus;
@@ -1035,7 +977,6 @@ async fn query_service_dispatches_query_validation_failed_event_on_db_validation
     }
 }
 
-/// Test 1E.3: QueryService dispatches QueryExecutionError event when execution fails
 #[tokio::test]
 async fn query_service_dispatches_query_execution_error_event_on_db_execution_failure() {
     use oam::interceptor::get_event_bus;
@@ -1112,7 +1053,6 @@ async fn query_service_dispatches_query_execution_error_event_on_db_execution_fa
     }
 }
 
-/// Test 1E.4: Dispatched events include complete execution metadata
 #[tokio::test]
 async fn query_service_events_include_complete_execution_metadata() {
     use oam::interceptor::get_event_bus;
@@ -1191,7 +1131,6 @@ async fn query_service_events_include_complete_execution_metadata() {
     }
 }
 
-/// Test 1E.5: Events track row count from query execution
 #[tokio::test]
 async fn query_service_events_track_row_count() {
     use oam::interceptor::get_event_bus;

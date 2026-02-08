@@ -1,10 +1,3 @@
-//! Integration tests for GrpcExecutor with actual gRPC client connections
-//!
-//! These tests verify the end-to-end gRPC server functionality by:
-//! 1. Starting a GrpcExecutor server on a dynamic port (0)
-//! 2. Creating gRPC clients (QueryService and SchemaService)
-//! 3. Making RPC calls and verifying responses
-
 use oam::grpc_executor::GrpcExecutor;
 use roam_proto::v1::query::query_service_client::QueryServiceClient;
 use roam_proto::v1::query::ExecuteQueryRequest;
@@ -13,7 +6,6 @@ use roam_proto::v1::schema::GetSchemaRequest;
 use std::path::PathBuf;
 use std::time::Duration;
 
-/// Helper: Create a temporary test database path
 fn test_db_path() -> String {
     let mut path = PathBuf::from(std::env::temp_dir());
     path.push("oam_grpc_integration_tests");
@@ -22,14 +14,12 @@ fn test_db_path() -> String {
     path.to_string_lossy().to_string()
 }
 
-/// Helper: Find an available port by binding to port 0 and getting the OS-assigned port
 fn get_available_port() -> Result<u16, Box<dyn std::error::Error>> {
     let listener = std::net::TcpListener::bind("127.0.0.1:0")?;
     let addr = listener.local_addr()?;
     Ok(addr.port())
 }
 
-/// Test 1: QueryService::execute_query RPC call succeeds
 #[tokio::test]
 async fn query_service_execute_query_rpc() {
     let db_path = test_db_path();
@@ -64,7 +54,6 @@ async fn query_service_execute_query_rpc() {
     }
 }
 
-/// Test 2: SchemaService::get_schema RPC call succeeds
 #[tokio::test]
 async fn schema_service_get_schema_rpc() {
     let db_path = test_db_path();
@@ -95,7 +84,6 @@ async fn schema_service_get_schema_rpc() {
     }
 }
 
-/// Test 3: GrpcExecutor supports concurrent RPC calls
 #[tokio::test]
 async fn grpc_executor_supports_concurrent_calls() {
     let db_path = test_db_path();
@@ -125,7 +113,6 @@ async fn grpc_executor_supports_concurrent_calls() {
     drop(handle);
 }
 
-/// Test 4: GrpcExecutor server can be stopped and restarted
 #[tokio::test]
 async fn grpc_executor_can_restart() {
     let db_path = test_db_path();
@@ -156,7 +143,6 @@ async fn grpc_executor_can_restart() {
     drop(handle2);
 }
 
-/// Test 5: Multiple servers can run on different ports
 #[tokio::test]
 async fn grpc_executor_multiple_servers_different_ports() {
     let db_path1 = format!("{}_srv1", test_db_path());
@@ -185,7 +171,6 @@ async fn grpc_executor_multiple_servers_different_ports() {
     drop(handle2);
 }
 
-/// Test 6: GrpcExecutor properly handles QueryService requests
 #[tokio::test]
 async fn query_service_handles_requests() {
     let db_path = test_db_path();
@@ -233,7 +218,6 @@ async fn query_service_handles_requests() {
     drop(handle);
 }
 
-/// Test 7: GrpcExecutor properly handles SchemaService requests
 #[tokio::test]
 async fn schema_service_handles_requests() {
     let db_path = test_db_path();

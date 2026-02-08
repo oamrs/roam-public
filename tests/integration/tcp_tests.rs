@@ -3,14 +3,12 @@ use oam::tcp::server::{JsonRpcServer, JsonRpcServerConfig};
 use std::time::Duration;
 use tempfile::NamedTempFile;
 
-/// Helper: Find an available port by binding to port 0 and getting the OS-assigned port
 fn get_available_port() -> Result<u16, Box<dyn std::error::Error>> {
     let listener = std::net::TcpListener::bind("127.0.0.1:0")?;
     let addr = listener.local_addr()?;
     Ok(addr.port())
 }
 
-/// Test 1F.1: JsonRpcServer can be created and configured
 #[tokio::test]
 async fn tcp_server_can_be_created() {
     let port = get_available_port().expect("Failed to get available port");
@@ -26,7 +24,6 @@ async fn tcp_server_can_be_created() {
     assert!(server.is_ok(), "JsonRpcServer should be creatable");
 }
 
-/// Test 1F.2: JsonRpcServer can be started on configured port
 #[tokio::test]
 async fn tcp_server_starts_on_configured_port() {
     let port = get_available_port().expect("Failed to get available port");
@@ -42,10 +39,8 @@ async fn tcp_server_starts_on_configured_port() {
     let handle = server.start().await;
     assert!(handle.is_ok(), "Server should start successfully");
 
-    // Give server time to bind
     tokio::time::sleep(Duration::from_millis(100)).await;
 
-    // Verify server is running by attempting connection
     let client = JsonRpcClient::connect(&format!("http://127.0.0.1:{}", port)).await;
 
     assert!(
@@ -57,7 +52,6 @@ async fn tcp_server_starts_on_configured_port() {
     let _result = handle.unwrap().stop().await;
 }
 
-/// Test 1F.3: JsonRpcClient can connect to running JsonRpcServer
 #[tokio::test]
 async fn tcp_client_connects_to_server() {
     let port = get_available_port().expect("Failed to get available port");
@@ -83,10 +77,8 @@ async fn tcp_client_connects_to_server() {
     let _result = handle.stop().await;
 }
 
-/// Test 1F.4: JsonRpcServer with database path can serve schema requests
 #[tokio::test]
 async fn tcp_server_serves_schema_over_network() {
-    // Setup test database
     let tmp = NamedTempFile::new().expect("create tmp file");
     let db_path = tmp.path().to_str().unwrap().to_string();
 
@@ -96,7 +88,6 @@ async fn tcp_server_serves_schema_over_network() {
         .expect("create table");
     drop(_conn);
 
-    // Start server with database
     let port = get_available_port().expect("Failed to get available port");
     let config = JsonRpcServerConfig {
         host: "127.0.0.1".to_string(),
@@ -109,10 +100,7 @@ async fn tcp_server_serves_schema_over_network() {
     let server = JsonRpcServer::new(config).expect("create server");
     let handle = server.start().await.expect("start server");
 
-    // Increased wait time for server initialization when running with other tests
     tokio::time::sleep(Duration::from_millis(500)).await;
-
-    // Connect client and request schema (with retry for test parallelization)
     let mut client = None;
     for attempt in 0..5 {
         match JsonRpcClient::connect(&format!("http://127.0.0.1:{}", port)).await {
@@ -142,10 +130,8 @@ async fn tcp_server_serves_schema_over_network() {
     let _result = handle.stop().await;
 }
 
-/// Test 1F.5: JsonRpcServer can execute queries over network
 #[tokio::test]
 async fn tcp_server_executes_query_over_network() {
-    // Setup test database with data
     let tmp = NamedTempFile::new().expect("create tmp file");
     let db_path = tmp.path().to_str().unwrap().to_string();
 
@@ -170,7 +156,6 @@ async fn tcp_server_executes_query_over_network() {
         .expect("insert row");
     drop(_conn);
 
-    // Start server
     let port = get_available_port().expect("Failed to get available port");
     let config = JsonRpcServerConfig {
         host: "127.0.0.1".to_string(),
@@ -185,7 +170,6 @@ async fn tcp_server_executes_query_over_network() {
 
     tokio::time::sleep(Duration::from_millis(100)).await;
 
-    // Connect and execute query
     let client = JsonRpcClient::connect(&format!("http://127.0.0.1:{}", port))
         .await
         .expect("create client");
@@ -202,7 +186,6 @@ async fn tcp_server_executes_query_over_network() {
     let _result = handle.stop().await;
 }
 
-/// Test 1F.6: JsonRpcServer validates queries before execution
 #[tokio::test]
 async fn tcp_server_validates_query_over_network() {
     let tmp = NamedTempFile::new().expect("create tmp file");
@@ -232,7 +215,6 @@ async fn tcp_server_validates_query_over_network() {
         .await
         .expect("create client");
 
-    // Try to execute a mutation (INSERT)
     let response = client
         .execute_query(
             "test_db",
@@ -253,7 +235,6 @@ async fn tcp_server_validates_query_over_network() {
     let _result = handle.stop().await;
 }
 
-/// Test 1F.7: JsonRpcServer rejects malicious queries over network
 #[tokio::test]
 async fn tcp_server_blocks_injection_over_network() {
     let tmp = NamedTempFile::new().expect("create tmp file");
@@ -283,7 +264,6 @@ async fn tcp_server_blocks_injection_over_network() {
         .await
         .expect("create client");
 
-    // Try command chaining injection
     let response = client
         .execute_query("test_db", "SELECT * FROM users; DROP TABLE users;", 100, 30)
         .await;
@@ -299,7 +279,6 @@ async fn tcp_server_blocks_injection_over_network() {
     let _result = handle.stop().await;
 }
 
-/// Test 1F.8: JsonRpcServer handles multiple concurrent clients
 #[tokio::test]
 async fn tcp_server_handles_concurrent_clients() {
     let tmp = NamedTempFile::new().expect("create tmp file");
@@ -361,7 +340,6 @@ async fn tcp_server_handles_concurrent_clients() {
     let _result = handle.stop().await;
 }
 
-/// Test 1F.9: JsonRpcServer propagates events over gRPC
 #[tokio::test]
 async fn tcp_server_propagates_execution_events() {
     let tmp = NamedTempFile::new().expect("create tmp file");
@@ -409,7 +387,6 @@ async fn tcp_server_propagates_execution_events() {
     let _result = handle.stop().await;
 }
 
-/// Test 1F.10: JsonRpcServer can be gracefully shut down
 #[tokio::test]
 async fn tcp_server_graceful_shutdown() {
     let port = get_available_port().expect("Failed to get available port");
@@ -426,19 +403,16 @@ async fn tcp_server_graceful_shutdown() {
 
     tokio::time::sleep(Duration::from_millis(100)).await;
 
-    // Verify client can connect
     let client = JsonRpcClient::connect(&format!("http://127.0.0.1:{}", port))
         .await
         .expect("create client");
     assert!(client.is_connected(), "Client should be connected");
 
-    // Gracefully shutdown
     let result = handle.stop().await;
     assert!(result.is_ok(), "Shutdown should succeed");
 
     tokio::time::sleep(Duration::from_millis(100)).await;
 
-    // Verify client cannot connect after shutdown
     let result = JsonRpcClient::connect(&format!("http://127.0.0.1:{}", port)).await;
     assert!(
         result.is_err(),
@@ -446,7 +420,6 @@ async fn tcp_server_graceful_shutdown() {
     );
 }
 
-/// Test 1F.10: JsonRpcServer sends error response on malformed JSON
 #[tokio::test]
 async fn tcp_server_sends_error_on_malformed_json() {
     use serde_json::json;
@@ -464,22 +437,18 @@ async fn tcp_server_sends_error_on_malformed_json() {
     let server = JsonRpcServer::new(config).expect("create server");
     let handle = server.start().await.expect("start server");
 
-    // Give the server time to bind
     tokio::time::sleep(Duration::from_millis(100)).await;
 
-    // Connect directly with TCP and send malformed JSON
     let mut socket = tokio::net::TcpStream::connect(&format!("127.0.0.1:{}", port))
         .await
         .expect("connect to server");
 
-    // Send malformed JSON
     let malformed_json = "{invalid json";
     socket
         .write_all(malformed_json.as_bytes())
         .await
         .expect("write malformed json");
 
-    // Read error response
     let mut buffer = [0u8; 256];
     let n = socket.read(&mut buffer).await.expect("read error response");
 
@@ -487,7 +456,6 @@ async fn tcp_server_sends_error_on_malformed_json() {
     let response: serde_json::Value =
         serde_json::from_str(&response_str).expect("parse error response as JSON");
 
-    // Verify we get a proper error response with status and error message
     assert_eq!(
         response.get("status"),
         Some(&json!(3)),
