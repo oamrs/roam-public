@@ -40,9 +40,9 @@ impl ProtoAgentService for GrpcAgentServiceImpl {
         &self,
         request: Request<ConnectRequest>,
     ) -> Result<Response<ConnectResponse>, Status> {
-        let req = request.into_inner();
+        let _req = request.into_inner();
         // println!("Agent registered: {} (v{})", req.agent_id, req.version);
-        
+
         Ok(Response::new(ConnectResponse {
             success: true,
             session_id: uuid::Uuid::new_v4().to_string(),
@@ -55,7 +55,7 @@ impl ProtoAgentService for GrpcAgentServiceImpl {
         &self,
         _request: Request<EventStreamRequest>,
     ) -> Result<Response<Self::StreamEventsStream>, Status> {
-        let (tx, rx) = tokio::sync::mpsc::channel(4);
+        let (_tx, rx) = tokio::sync::mpsc::channel(4);
         // Create an empty stream for now
         // In real impl, we would register this channel to an event bus
         Ok(Response::new(ReceiverStream::new(rx)))
