@@ -155,6 +155,9 @@ impl ProtoQueryService for GrpcQueryServiceImpl {
             parameters: Default::default(),
         };
 
+        // TODO: Enforce CODE_FIRST / DATA_FIRST modes during validation as well.
+        // Requires resolving the agent's session/mode and registry.
+
         let service = self.inner.lock().await;
         match service.validate_query(exec_req).await {
             Ok(resp) => Ok(Response::new(ValidationResponse {
