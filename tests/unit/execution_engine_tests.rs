@@ -4,7 +4,6 @@ use oam::execution_engine::{
 use oam::executor::ExecuteQueryRequest;
 use std::collections::HashMap;
 use std::sync::Arc;
-use std::time::Instant;
 use uuid::Uuid;
 
 fn test_db_path() -> String {

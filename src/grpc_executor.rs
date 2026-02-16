@@ -126,9 +126,12 @@ impl ProtoQueryService for GrpcQueryServiceImpl {
         };
 
         // TODO: Enforce CODE_FIRST / DATA_FIRST modes.
-        // 1. Retrieve session/agent state associated with this request.
+        // SECURITY NOTE: This is currently a Client-Side only check.
+        // To be secure, we MUST:
+        // 1. Retrieve session/agent state associated with this request (via metadata/headers).
         // 2. If CODE_FIRST: Parse table name and verify it exists in the *registered* schema (not just DB schema).
         // 3. If DATA_FIRST: Allow if table exists in DB schema (Introspection).
+        // Failure to implement this allows malicious clients to bypass schema restrictions.
 
         let service = self.inner.lock().await;
         match service.execute_query(exec_req).await {
@@ -156,7 +159,8 @@ impl ProtoQueryService for GrpcQueryServiceImpl {
         };
 
         // TODO: Enforce CODE_FIRST / DATA_FIRST modes during validation as well.
-        // Requires resolving the agent's session/mode and registry.
+        // SECURITY NOTE: This is currently a Client-Side only check.
+        // Requires resolving the agent's session/mode and registry from request metadata.
 
         let service = self.inner.lock().await;
         match service.validate_query(exec_req).await {
@@ -218,6 +222,6 @@ impl ProtoSchemaService for GrpcSchemaServiceImpl {
 
     // TODO: Add RegisterSchema RPC
     // When implementing RegisterSchema, ensure that we validate the current
-    // agent's SchemaMode. If the agent connected with DATA_ONLY, this RPC
+    // agent's SchemaMode. If the agent connected with DATA_FIRST, this RPC
     // MUST return a permissions error (e.g. PermissionDenied or InvalidArgument).
 }
