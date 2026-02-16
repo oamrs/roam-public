@@ -125,6 +125,11 @@ impl ProtoQueryService for GrpcQueryServiceImpl {
             timeout_seconds: req.timeout_seconds,
         };
 
+        // TODO: Enforce CODE_FIRST / DATA_FIRST modes.
+        // 1. Retrieve session/agent state associated with this request.
+        // 2. If CODE_FIRST: Parse table name and verify it exists in the *registered* schema (not just DB schema).
+        // 3. If DATA_FIRST: Allow if table exists in DB schema (Introspection).
+
         let service = self.inner.lock().await;
         match service.execute_query(exec_req).await {
             Ok(resp) => Ok(Response::new(ProtoExecuteQueryResponse {
