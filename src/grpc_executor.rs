@@ -207,4 +207,9 @@ impl ProtoSchemaService for GrpcSchemaServiceImpl {
             Err(e) => Err(Status::internal(e)),
         }
     }
+
+    // TODO: Add RegisterSchema RPC
+    // When implementing RegisterSchema, ensure that we validate the current
+    // agent's SchemaMode. If the agent connected with DATA_ONLY, this RPC
+    // MUST return a permissions error (e.g. PermissionDenied or InvalidArgument).
 }
