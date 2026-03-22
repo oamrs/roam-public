@@ -115,6 +115,30 @@ fn policy_context_rejects_non_allowlisted_subquery_shape() {
 }
 
 #[test]
+fn policy_context_rejects_set_operation_inside_allowlisted_subquery() {
+    let context = PolicyContext {
+        tool: ToolContract {
+            name: "list-users-by-organization".to_string(),
+            intent: ToolIntent::ReadSelect,
+            subquery_policy: SubqueryPolicy::AllowListed(vec![AuthorizedSubqueryShape {
+                table: "organizations".to_string(),
+            }]),
+        },
+        authorization: AuthorizationContext {
+            allowed_intents: vec![ToolIntent::ReadSelect],
+            grants: vec!["tool:users.read".to_string()],
+        },
+    };
+
+    let decision = PolicyEngine::evaluate_with_context(
+        "SELECT id FROM users WHERE organization_id IN (SELECT id FROM organizations UNION SELECT id FROM organizations)",
+        &context,
+    );
+
+    assert_denied(&decision, "union");
+}
+
+#[test]
 fn authorization_context_rejects_unauthorized_intent() {
     let context = PolicyContext {
         tool: ToolContract {

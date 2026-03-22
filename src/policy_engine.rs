@@ -245,9 +245,7 @@ impl PolicyEngine {
             );
         }
 
-        if let Some(keyword) =
-            Self::find_top_level_keyword(&analysis.tokens, SET_OPERATION_KEYWORDS)
-        {
+        if let Some(keyword) = Self::find_keyword(&analysis.tokens, SET_OPERATION_KEYWORDS) {
             return Self::deny(
                 "set-operation",
                 &format!(
