@@ -188,7 +188,6 @@ impl JsonRpcServer {
             .await
             .is_err()
         {
-            Self::close_connection(peer_addr, rate_limiter.as_ref()).await;
             return;
         }
 

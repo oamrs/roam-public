@@ -127,3 +127,26 @@ async fn test_rate_limiter_stats() {
     let stats = limiter.get_stats().await;
     assert_eq!(stats.total_connections, 0);
 }
+
+#[tokio::test]
+async fn test_rate_limiter_rejected_connection_does_not_change_stats() {
+    let config = RateLimitConfig {
+        requests_per_second: 100,
+        max_concurrent_connections: 1,
+        max_total_connections: 1,
+        window_seconds: 1,
+    };
+
+    let limiter = RateLimiter::new(config);
+    let addr1 = "127.0.0.1:50009".parse().unwrap();
+    let addr2 = "127.0.0.1:50010".parse().unwrap();
+
+    limiter.check_connection(addr1).await.unwrap();
+    assert!(limiter.check_connection(addr2).await.is_err());
+
+    let stats = limiter.get_stats().await;
+    assert_eq!(stats.total_connections, 1);
+    assert_eq!(stats.active_clients, 1);
+
+    limiter.close_connection(addr1).await;
+}

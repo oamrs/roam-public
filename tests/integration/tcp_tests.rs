@@ -473,3 +473,68 @@ async fn tcp_server_sends_error_on_malformed_json() {
     // Cleanup
     let _ = handle.stop().await;
 }
+
+#[tokio::test]
+async fn tcp_server_does_not_undercount_rejected_connections() {
+    use serde_json::Value;
+    use tokio::io::AsyncReadExt;
+
+    let port = get_available_port().expect("Failed to get available port");
+    let config = JsonRpcServerConfig {
+        host: "127.0.0.1".to_string(),
+        port,
+        db_path: None,
+        auth_provider: None,
+        rate_limit_config: Some(oam::RateLimitConfig {
+            requests_per_second: 100,
+            max_concurrent_connections: 10,
+            max_total_connections: 1,
+            window_seconds: 1,
+        }),
+    };
+
+    let server = JsonRpcServer::new(config).expect("create server");
+    let handle = server.start().await.expect("start server");
+
+    tokio::time::sleep(Duration::from_millis(100)).await;
+
+    let _first_socket = tokio::net::TcpStream::connect(&format!("127.0.0.1:{}", port))
+        .await
+        .expect("connect first client");
+
+    let mut second_socket = tokio::net::TcpStream::connect(&format!("127.0.0.1:{}", port))
+        .await
+        .expect("connect second client");
+
+    let second_response = tokio::time::timeout(Duration::from_millis(500), async {
+        let mut buffer = [0u8; 256];
+        let n = second_socket
+            .read(&mut buffer)
+            .await
+            .expect("read second response");
+        serde_json::from_slice::<Value>(&buffer[..n]).expect("parse second response")
+    })
+    .await
+    .expect("second client should receive rejection promptly");
+
+    assert_eq!(second_response.get("status"), Some(&serde_json::json!(5)));
+
+    let mut third_socket = tokio::net::TcpStream::connect(&format!("127.0.0.1:{}", port))
+        .await
+        .expect("connect third client");
+
+    let third_response = tokio::time::timeout(Duration::from_millis(500), async {
+        let mut buffer = [0u8; 256];
+        let n = third_socket
+            .read(&mut buffer)
+            .await
+            .expect("read third response");
+        serde_json::from_slice::<Value>(&buffer[..n]).expect("parse third response")
+    })
+    .await
+    .expect("third client should also be rejected while first is active");
+
+    assert_eq!(third_response.get("status"), Some(&serde_json::json!(5)));
+
+    let _ = handle.stop().await;
+}

@@ -450,23 +450,41 @@ fn extract_nested_select_tables(tokens: &[Token]) -> Vec<String> {
 
 fn extract_relation_name(tokens: &[Token], depth: usize) -> Option<String> {
     let mut relation_segments = Vec::new();
+    let mut saw_relation_start = false;
+    let mut expect_qualified_segment = false;
 
     for token in tokens {
         if token.depth != depth {
-            if !relation_segments.is_empty() {
+            if saw_relation_start {
                 break;
             }
             continue;
         }
 
+        if token.word == "." {
+            if !saw_relation_start {
+                continue;
+            }
+
+            expect_qualified_segment = true;
+            continue;
+        }
+
         if is_reserved_relation_token(&token.word) {
-            if relation_segments.is_empty() {
+            if !saw_relation_start {
                 continue;
             }
             break;
         }
 
-        relation_segments.push(token.word.to_lowercase());
+        if !saw_relation_start || expect_qualified_segment {
+            relation_segments.push(token.word.to_lowercase());
+            saw_relation_start = true;
+            expect_qualified_segment = false;
+            continue;
+        }
+
+        break;
     }
 
     relation_segments.pop()
@@ -537,6 +555,13 @@ fn lex_sql(query: &str) -> LexAnalysis {
         match ch {
             ';' => {
                 analysis.has_semicolon = true;
+                index += 1;
+            }
+            '.' => {
+                analysis.tokens.push(Token {
+                    word: ".".to_string(),
+                    depth,
+                });
                 index += 1;
             }
             '(' => {
