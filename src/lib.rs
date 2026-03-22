@@ -6,6 +6,7 @@ pub mod grpc_executor;
 pub mod interceptor;
 pub mod mapper;
 pub mod mirror;
+pub mod policy_engine;
 pub mod tcp;
 
 // Re-export commonly used types
@@ -21,6 +22,10 @@ pub use interceptor::{
 pub use mapper::{GrpcMapper, LocalMapper, Mapper, TcpMapper};
 pub use mirror::{
     introspect_sqlite_path, Column, CompositeForeignKey, ForeignKey, SchemaModel, Table,
+};
+pub use policy_engine::{
+    AuthorizationContext, AuthorizedSubqueryShape, PolicyContext, PolicyDecision, PolicyEngine,
+    SubqueryPolicy, ToolContract, ToolIntent,
 };
 pub use tcp::{
     ApiKeyAuth, AuthProvider, AuthenticatedClient, JsonRpcClient, JsonRpcServer,

@@ -2,6 +2,10 @@ use oam::executor::{QueryService, QueryServiceImpl, SchemaService, SchemaService
 use oam::generated::{
     ExecuteQueryRequest, GetSchemaRequest, GetTableRequest, QueryStatus, ValidateQueryRequest,
 };
+use oam::policy_engine::{
+    AuthorizationContext, AuthorizedSubqueryShape, PolicyContext, SubqueryPolicy, ToolContract,
+    ToolIntent,
+};
 
 #[tokio::test]
 async fn schema_service_can_be_created() {
@@ -260,6 +264,138 @@ async fn query_service_execute_query_validates_before_execution() {
         QueryStatus::ValidationError as i32,
         "Should return ValidationError for injected semicolon"
     );
+}
+
+#[tokio::test]
+async fn query_service_execute_query_rejects_transaction_control() {
+    let service = QueryServiceImpl::new();
+
+    let request = ExecuteQueryRequest {
+        db_identifier: "primary".to_string(),
+        query: "BEGIN TRANSACTION".to_string(),
+        parameters: std::collections::HashMap::new(),
+        limit: 100,
+        timeout_seconds: 30,
+    };
+
+    let result = service.execute_query(request).await;
+    assert!(result.is_ok());
+    let response = result.unwrap();
+
+    assert_eq!(response.status, QueryStatus::ValidationError as i32);
+    assert!(response
+        .error_message
+        .to_uppercase()
+        .contains("TRANSACTION"));
+}
+
+#[tokio::test]
+async fn query_service_execute_query_rejects_write_hidden_in_cte() {
+    let service = QueryServiceImpl::new();
+
+    let request = ExecuteQueryRequest {
+        db_identifier: "primary".to_string(),
+        query: "WITH touched AS (DELETE FROM users RETURNING id) SELECT id FROM touched"
+            .to_string(),
+        parameters: std::collections::HashMap::new(),
+        limit: 100,
+        timeout_seconds: 30,
+    };
+
+    let result = service.execute_query(request).await;
+    assert!(result.is_ok());
+    let response = result.unwrap();
+
+    assert_eq!(response.status, QueryStatus::ValidationError as i32);
+    assert!(response.error_message.to_uppercase().contains("DELETE"));
+}
+
+#[tokio::test]
+async fn query_service_validate_query_with_policy_allows_allowlisted_subquery() {
+    let tmp = tempfile::NamedTempFile::new().expect("create tmp file");
+    let db_path = tmp.path().to_str().unwrap();
+
+    let conn = rusqlite::Connection::open(db_path).expect("open db");
+    conn.execute(
+        "CREATE TABLE users (id INTEGER PRIMARY KEY, organization_id INTEGER)",
+        [],
+    )
+    .expect("create users table");
+    conn.execute(
+        "CREATE TABLE organizations (id INTEGER PRIMARY KEY, name TEXT)",
+        [],
+    )
+    .expect("create organizations table");
+    drop(conn);
+
+    let mut service = QueryServiceImpl::new();
+    service.set_db_path(db_path).expect("set db path");
+
+    let request = ValidateQueryRequest {
+        db_identifier: "primary".to_string(),
+        query: "SELECT id FROM users WHERE organization_id IN (SELECT id FROM organizations)"
+            .to_string(),
+        parameters: std::collections::HashMap::new(),
+    };
+    let context = PolicyContext {
+        tool: ToolContract {
+            name: "list-users-by-organization".to_string(),
+            intent: ToolIntent::ReadSelect,
+            subquery_policy: SubqueryPolicy::AllowListed(vec![AuthorizedSubqueryShape {
+                table: "organizations".to_string(),
+            }]),
+        },
+        authorization: AuthorizationContext {
+            allowed_intents: vec![ToolIntent::ReadSelect],
+            grants: vec!["tool:users.read".to_string()],
+        },
+    };
+
+    let response = service
+        .validate_query_with_policy(request, context)
+        .await
+        .expect("validate query with policy");
+
+    assert!(response.valid);
+}
+
+#[tokio::test]
+async fn query_service_validate_query_with_policy_rejects_unauthorized_intent() {
+    let tmp = tempfile::NamedTempFile::new().expect("create tmp file");
+    let db_path = tmp.path().to_str().unwrap();
+
+    let conn = rusqlite::Connection::open(db_path).expect("open db");
+    conn.execute("CREATE TABLE users (id INTEGER PRIMARY KEY)", [])
+        .expect("create users table");
+    drop(conn);
+
+    let mut service = QueryServiceImpl::new();
+    service.set_db_path(db_path).expect("set db path");
+
+    let request = ValidateQueryRequest {
+        db_identifier: "primary".to_string(),
+        query: "SELECT id FROM users".to_string(),
+        parameters: std::collections::HashMap::new(),
+    };
+    let context = PolicyContext {
+        tool: ToolContract {
+            name: "list-users".to_string(),
+            intent: ToolIntent::ReadSelect,
+            subquery_policy: SubqueryPolicy::DenyAll,
+        },
+        authorization: AuthorizationContext {
+            allowed_intents: vec![ToolIntent::WriteDelete],
+            grants: vec![],
+        },
+    };
+
+    let response = service
+        .validate_query_with_policy(request, context)
+        .await
+        .expect("validate query with policy");
+
+    assert!(!response.valid);
+    assert!(response.error_message.to_uppercase().contains("AUTHORIZED"));
 }
 
 #[tokio::test]

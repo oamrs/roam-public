@@ -27,3 +27,6 @@ mod execution_engine_tests;
 
 #[path = "unit/grpc_agent_service_tests.rs"]
 mod grpc_agent_service_tests;
+
+#[path = "unit/policy_engine_tests.rs"]
+mod policy_engine_tests;

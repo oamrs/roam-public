@@ -1,3 +1,4 @@
+use crate::policy_engine::{PolicyContext, PolicyEngine, ToolIntent};
 use once_cell::sync::Lazy;
 use rusqlite::Connection;
 use serde::{Deserialize, Serialize};
@@ -48,94 +49,6 @@ pub enum QueryStatus {
     ExecutionError = 3,
     Timeout = 4,
     Unauthorized = 5,
-}
-
-enum SecurityPattern {
-    LineComment,
-    BlockComment,
-    CommandChain,
-    Pragma,
-    Explain,
-    BooleanInjection,
-    UnionInjection,
-    TimeBlindInjection,
-    SubqueryInjection,
-    DatabaseManipulation,
-}
-
-impl SecurityPattern {
-    fn check(&self, query: &str, query_upper: &str) -> Option<String> {
-        match self {
-            SecurityPattern::LineComment if query.contains("--") => {
-                Some("SQL line comment syntax (--) is not allowed".to_string())
-            }
-            SecurityPattern::BlockComment if query.contains("/*") || query.contains("*/") => {
-                Some("SQL block comment syntax (/* */) is not allowed".to_string())
-            }
-            SecurityPattern::CommandChain if query.contains(';') => {
-                Some("Command chaining detected: semicolon is not allowed".to_string())
-            }
-            SecurityPattern::Pragma if query_upper.contains("PRAGMA") => {
-                Some("PRAGMA statements are not allowed".to_string())
-            }
-            SecurityPattern::Explain if query_upper.trim_start().starts_with("EXPLAIN") => {
-                Some("EXPLAIN statements are not allowed".to_string())
-            }
-            SecurityPattern::BooleanInjection
-                if (query_upper.contains(" OR '") || query_upper.contains(" OR \""))
-                    && (query_upper.contains("'1'='1") || query_upper.contains("\"1\"=\"1")) =>
-            {
-                Some("Suspected boolean-based SQL injection detected".to_string())
-            }
-            SecurityPattern::UnionInjection
-                if query_upper.contains("UNION") && query_upper.contains("SELECT") =>
-            {
-                Some("UNION queries are not allowed - potential injection vector".to_string())
-            }
-            SecurityPattern::TimeBlindInjection
-                if query_upper.contains("SLEEP(") || query_upper.contains("WAITFOR") =>
-            {
-                Some("SLEEP injection detected - time-based injection not allowed".to_string())
-            }
-            SecurityPattern::SubqueryInjection if query_upper.contains("(SELECT") => {
-                Some("Subquery injection detected - embedded SELECT not allowed".to_string())
-            }
-            SecurityPattern::DatabaseManipulation
-                if query_upper.contains("ATTACH") || query_upper.contains("DETACH") =>
-            {
-                Some("ATTACH/DETACH DATABASE statements are not allowed".to_string())
-            }
-            _ => None,
-        }
-    }
-}
-
-#[derive(PartialEq)]
-enum MutationPattern {
-    Dml,
-    Ddl,
-}
-
-impl MutationPattern {
-    fn check(&self, query_upper: &str) -> Option<String> {
-        match self {
-            MutationPattern::Dml
-                if query_upper.contains("INSERT")
-                    || query_upper.contains("UPDATE")
-                    || query_upper.contains("DELETE") =>
-            {
-                Some("DML statements (INSERT, UPDATE, DELETE) are not allowed".to_string())
-            }
-            MutationPattern::Ddl
-                if query_upper.contains("CREATE")
-                    || query_upper.contains("DROP")
-                    || query_upper.contains("ALTER") =>
-            {
-                Some("DDL statements (CREATE, DROP, ALTER) are not allowed".to_string())
-            }
-            _ => None,
-        }
-    }
 }
 
 #[async_trait::async_trait]
@@ -296,28 +209,169 @@ impl QueryServiceImpl {
         Ok(())
     }
 
-    fn check_security_patterns(query: &str) -> Option<String> {
-        let query_upper = query.to_uppercase();
-        [
-            SecurityPattern::LineComment,
-            SecurityPattern::BlockComment,
-            SecurityPattern::CommandChain,
-            SecurityPattern::Pragma,
-            SecurityPattern::Explain,
-            SecurityPattern::BooleanInjection,
-            SecurityPattern::UnionInjection,
-            SecurityPattern::TimeBlindInjection,
-            SecurityPattern::SubqueryInjection,
-            SecurityPattern::DatabaseManipulation,
-        ]
-        .iter()
-        .find_map(|pattern| pattern.check(query, &query_upper))
+    fn evaluate_policy(query: &str, policy_context: Option<&PolicyContext>) -> Option<String> {
+        let decision = match policy_context {
+            Some(context) => PolicyEngine::evaluate_with_context(query, context),
+            None => PolicyEngine::evaluate(query, ToolIntent::ReadSelect),
+        };
+
+        if decision.allowed {
+            None
+        } else {
+            Some(
+                decision
+                    .reason
+                    .unwrap_or_else(|| "Query rejected by execution policy engine".to_string()),
+            )
+        }
     }
 
-    fn check_mutation_keywords(query_upper: &str) -> Option<String> {
-        [MutationPattern::Dml, MutationPattern::Ddl]
+    pub async fn validate_query_with_policy(
+        &self,
+        request: ValidateQueryRequest,
+        policy_context: PolicyContext,
+    ) -> Result<ValidationResponse, String> {
+        self.validate_query_internal(request, Some(&policy_context))
+            .await
+    }
+
+    pub async fn execute_query_with_policy(
+        &self,
+        request: ExecuteQueryRequest,
+        policy_context: PolicyContext,
+    ) -> Result<ExecuteQueryResponse, String> {
+        self.execute_query_internal(request, Some(&policy_context))
+            .await
+    }
+
+    async fn validate_query_internal(
+        &self,
+        request: ValidateQueryRequest,
+        policy_context: Option<&PolicyContext>,
+    ) -> Result<ValidationResponse, String> {
+        let db_path = match &self.db_path {
+            Some(path) => path,
+            None => {
+                return Ok(ValidationResponse {
+                    valid: false,
+                    error_message: "Phase 1A: Query validation not yet implemented".to_string(),
+                })
+            }
+        };
+
+        use crate::mirror::introspect_sqlite_path;
+
+        if let Some(error_message) = Self::evaluate_policy(&request.query, policy_context) {
+            return Ok(ValidationResponse {
+                valid: false,
+                error_message,
+            });
+        }
+
+        let query_upper = request.query.to_uppercase();
+
+        if !query_upper.contains("FROM") {
+            return Ok(ValidationResponse {
+                valid: true,
+                error_message: String::new(),
+            });
+        }
+
+        let schema = introspect_sqlite_path(db_path)
+            .map_err(|e| format!("Failed to introspect schema: {}", e))?;
+
+        let from_pos = query_upper
+            .find("FROM")
+            .expect("FROM clause existence was checked above");
+        let after_from_upper = query_upper[from_pos + 4..].trim_start();
+        let raw_table_token_upper = after_from_upper.split_whitespace().next().unwrap_or("");
+
+        let after_from_original = request.query[from_pos + 4..].trim_start();
+        let raw_table_token_original = after_from_original.split_whitespace().next().unwrap_or("");
+
+        let raw_token = raw_table_token_upper.trim_end_matches(';');
+        let last_segment = raw_token.rsplit('.').next().unwrap_or(raw_token);
+        let normalized_table_name = last_segment
+            .trim_matches(|c| c == '"' || c == '`' || c == '[' || c == ']')
+            .to_string();
+
+        let original_token = raw_table_token_original.trim_end_matches(';');
+        let original_last_segment = original_token.rsplit('.').next().unwrap_or(original_token);
+        let display_table_name = original_last_segment
+            .trim_matches(|c| c == '"' || c == '`' || c == '[' || c == ']')
+            .to_string();
+
+        if !schema
+            .tables
             .iter()
-            .find_map(|pattern| pattern.check(query_upper))
+            .any(|t| t.name.eq_ignore_ascii_case(&normalized_table_name))
+        {
+            return Ok(ValidationResponse {
+                valid: false,
+                error_message: format!("Table '{}' does not exist in schema", display_table_name),
+            });
+        }
+
+        Ok(ValidationResponse {
+            valid: true,
+            error_message: String::new(),
+        })
+    }
+
+    async fn execute_query_internal(
+        &self,
+        request: ExecuteQueryRequest,
+        policy_context: Option<&PolicyContext>,
+    ) -> Result<ExecuteQueryResponse, String> {
+        let start_time = std::time::Instant::now();
+
+        if let Some(error_msg) = Self::evaluate_policy(&request.query, policy_context) {
+            return self
+                .build_validation_error_response(&request, error_msg, start_time)
+                .await;
+        }
+
+        let db_path = match &self.db_path {
+            Some(path) => path,
+            None => {
+                let error_msg = "Database path not configured".to_string();
+                return self
+                    .build_execution_error_response(&request, error_msg, start_time)
+                    .await;
+            }
+        };
+
+        let validation_result = self
+            .validate_query_internal(
+                ValidateQueryRequest {
+                    db_identifier: request.db_identifier.clone(),
+                    query: request.query.clone(),
+                    parameters: request.parameters.clone(),
+                },
+                policy_context,
+            )
+            .await?;
+
+        if !validation_result.valid {
+            return self
+                .build_validation_error_response(
+                    &request,
+                    validation_result.error_message,
+                    start_time,
+                )
+                .await;
+        }
+
+        let execution_result = execute_query_on_database_async(
+            db_path,
+            &request.query,
+            request.limit,
+            request.timeout_seconds,
+        )
+        .await;
+
+        self.build_execution_response(&request, execution_result, start_time)
+            .await
     }
 
     async fn build_validation_error_response(
@@ -477,154 +531,14 @@ impl QueryService for QueryServiceImpl {
         &self,
         request: ValidateQueryRequest,
     ) -> Result<ValidationResponse, String> {
-        let db_path = match &self.db_path {
-            Some(path) => path,
-            None => {
-                return Ok(ValidationResponse {
-                    valid: false,
-                    error_message: "Phase 1A: Query validation not yet implemented".to_string(),
-                })
-            }
-        };
-
-        use crate::mirror::introspect_sqlite_path;
-
-        let query_upper = request.query.to_uppercase();
-
-        if let Some(error_message) = Self::check_security_patterns(&request.query) {
-            return Ok(ValidationResponse {
-                valid: false,
-                error_message,
-            });
-        }
-
-        // Check for mutation keywords (read-only enforcement)
-        if let Some(error_message) = Self::check_mutation_keywords(&query_upper) {
-            return Ok(ValidationResponse {
-                valid: false,
-                error_message,
-            });
-        }
-
-        // Check for FROM clause
-        if !query_upper.contains("FROM") {
-            return Ok(ValidationResponse {
-                valid: false,
-                error_message: "Query must contain FROM clause".to_string(),
-            });
-        }
-
-        // Introspect schema
-        let schema = introspect_sqlite_path(db_path)
-            .map_err(|e| format!("Failed to introspect schema: {}", e))?;
-
-        // Extract and validate table name (robust to case, schema qualifiers, and quotes)
-        let from_pos = query_upper
-            .find("FROM")
-            .expect("FROM clause existence was checked above");
-        let after_from_upper = query_upper[from_pos + 4..].trim_start();
-        let raw_table_token_upper = after_from_upper.split_whitespace().next().unwrap_or("");
-
-        // Get the same token from the original query to preserve casing for error messages
-        let after_from_original = request.query[from_pos + 4..].trim_start();
-        let raw_table_token_original = after_from_original.split_whitespace().next().unwrap_or("");
-
-        // Normalize table token for schema matching:
-        // - strip trailing semicolons,
-        // - drop schema qualifier (take last segment after '.'),
-        // - remove surrounding quote-like characters.
-        let raw_token = raw_table_token_upper.trim_end_matches(';');
-        let last_segment = raw_token.rsplit('.').next().unwrap_or(raw_token);
-        let normalized_table_name = last_segment
-            .trim_matches(|c| c == '"' || c == '`' || c == '[' || c == ']')
-            .to_string();
-
-        // Also preserve original casing for error messages
-        let original_token = raw_table_token_original.trim_end_matches(';');
-        let original_last_segment = original_token.rsplit('.').next().unwrap_or(original_token);
-        let display_table_name = original_last_segment
-            .trim_matches(|c| c == '"' || c == '`' || c == '[' || c == ']')
-            .to_string();
-
-        if !schema
-            .tables
-            .iter()
-            .any(|t| t.name.eq_ignore_ascii_case(&normalized_table_name))
-        {
-            return Ok(ValidationResponse {
-                valid: false,
-                error_message: format!("Table '{}' does not exist in schema", display_table_name),
-            });
-        }
-
-        // If all checks pass
-        Ok(ValidationResponse {
-            valid: true,
-            error_message: String::new(),
-        })
+        self.validate_query_internal(request, None).await
     }
 
     async fn execute_query(
         &self,
         request: ExecuteQueryRequest,
     ) -> Result<ExecuteQueryResponse, String> {
-        let start_time = std::time::Instant::now();
-
-        if let Some(error_msg) = Self::check_security_patterns(&request.query) {
-            return self
-                .build_validation_error_response(&request, error_msg, start_time)
-                .await;
-        }
-
-        // Check mutation keywords
-        let query_upper = request.query.to_uppercase();
-        if let Some(error_msg) = Self::check_mutation_keywords(&query_upper) {
-            return self
-                .build_validation_error_response(&request, error_msg, start_time)
-                .await;
-        }
-
-        // Get database path or return error
-        let db_path = match &self.db_path {
-            Some(path) => path,
-            None => {
-                let error_msg = "Database path not configured".to_string();
-                return self
-                    .build_execution_error_response(&request, error_msg, start_time)
-                    .await;
-            }
-        };
-
-        // Full validation including schema checks
-        let validation_result = self
-            .validate_query(ValidateQueryRequest {
-                db_identifier: request.db_identifier.clone(),
-                query: request.query.clone(),
-                parameters: request.parameters.clone(),
-            })
-            .await?;
-
-        if !validation_result.valid {
-            return self
-                .build_validation_error_response(
-                    &request,
-                    validation_result.error_message,
-                    start_time,
-                )
-                .await;
-        }
-
-        // Execute query with timeout
-        let execution_result = execute_query_on_database_async(
-            db_path,
-            &request.query,
-            request.limit,
-            request.timeout_seconds,
-        )
-        .await;
-
-        self.build_execution_response(&request, execution_result, start_time)
-            .await
+        self.execute_query_internal(request, None).await
     }
 }
 
