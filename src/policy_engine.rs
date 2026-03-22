@@ -438,10 +438,7 @@ fn extract_nested_select_tables(tokens: &[Token]) -> Vec<String> {
             continue;
         }
 
-        if let Some(next_token) = tokens[index + 1..].iter().find(|candidate| {
-            candidate.depth == token.depth && !is_reserved_relation_token(&candidate.word)
-        }) {
-            let table_name = next_token.word.to_lowercase();
+        if let Some(table_name) = extract_relation_name(&tokens[index + 1..], token.depth) {
             if !tables.iter().any(|existing| existing == &table_name) {
                 tables.push(table_name);
             }
@@ -449,6 +446,30 @@ fn extract_nested_select_tables(tokens: &[Token]) -> Vec<String> {
     }
 
     tables
+}
+
+fn extract_relation_name(tokens: &[Token], depth: usize) -> Option<String> {
+    let mut relation_segments = Vec::new();
+
+    for token in tokens {
+        if token.depth != depth {
+            if !relation_segments.is_empty() {
+                break;
+            }
+            continue;
+        }
+
+        if is_reserved_relation_token(&token.word) {
+            if relation_segments.is_empty() {
+                continue;
+            }
+            break;
+        }
+
+        relation_segments.push(token.word.to_lowercase());
+    }
+
+    relation_segments.pop()
 }
 
 fn is_reserved_relation_token(token: &str) -> bool {
