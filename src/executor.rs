@@ -259,14 +259,81 @@ impl QueryServiceImpl {
             }
         };
 
+        Self::validate_query_against_db(db_path, &request, policy_context)
+    }
+
+    fn validate_query_against_db(
+        db_path: &str,
+        request: &ValidateQueryRequest,
+        policy_context: Option<&PolicyContext>,
+    ) -> Result<ValidationResponse, String> {
         use crate::mirror::introspect_sqlite_path;
 
-        if let Some(error_message) = Self::evaluate_policy(&request.query, policy_context) {
+        if let Some(error_message) = Self::validate_query_policy(&request.query, policy_context) {
             return Ok(ValidationResponse {
                 valid: false,
                 error_message,
             });
         }
+
+        let Some(from_pos) = find_top_level_keyword_position(&request.query, "FROM") else {
+            return Ok(ValidationResponse {
+                valid: false,
+                error_message: "SELECT statements must include a FROM clause".to_string(),
+            });
+        };
+
+        let schema = introspect_sqlite_path(db_path)
+            .map_err(|e| format!("Failed to introspect schema: {}", e))?;
+
+        let query_upper = request.query.to_uppercase();
+        let after_from_upper = query_upper[from_pos + 4..].trim_start();
+        let raw_table_token_upper = after_from_upper.split_whitespace().next().unwrap_or("");
+
+        let after_from_original = request.query[from_pos + 4..].trim_start();
+        let raw_table_token_original = after_from_original.split_whitespace().next().unwrap_or("");
+
+        let raw_token = raw_table_token_upper.trim_end_matches(';');
+        let last_segment = raw_token.rsplit('.').next().unwrap_or(raw_token);
+        let normalized_table_name = last_segment
+            .trim_matches(|c| c == '"' || c == '`' || c == '[' || c == ']')
+            .to_string();
+
+        let original_token = raw_table_token_original.trim_end_matches(';');
+        let original_last_segment = original_token.rsplit('.').next().unwrap_or(original_token);
+        let display_table_name = original_last_segment
+            .trim_matches(|c| c == '"' || c == '`' || c == '[' || c == ']')
+            .to_string();
+
+        if !schema
+            .tables
+            .iter()
+            .any(|t| t.name.eq_ignore_ascii_case(&normalized_table_name))
+        {
+            return Ok(ValidationResponse {
+                valid: false,
+                error_message: format!("Table '{}' does not exist in schema", display_table_name),
+            });
+        }
+
+        Ok(ValidationResponse {
+            valid: true,
+            error_message: String::new(),
+        })
+    }
+
+    fn validate_query_policy(
+        query: &str,
+        policy_context: Option<&PolicyContext>,
+    ) -> Option<String> {
+        Self::evaluate_policy(query, policy_context)
+    }
+
+    fn validate_query_schema(
+        db_path: &str,
+        request: &ValidateQueryRequest,
+    ) -> Result<ValidationResponse, String> {
+        use crate::mirror::introspect_sqlite_path;
 
         let Some(from_pos) = find_top_level_keyword_position(&request.query, "FROM") else {
             return Ok(ValidationResponse {
@@ -321,9 +388,9 @@ impl QueryServiceImpl {
     ) -> Result<ExecuteQueryResponse, String> {
         let start_time = std::time::Instant::now();
 
-        if let Some(error_msg) = Self::evaluate_policy(&request.query, policy_context) {
+        if let Some(error_message) = Self::validate_query_policy(&request.query, policy_context) {
             return self
-                .build_validation_error_response(&request, error_msg, start_time)
+                .build_validation_error_response(&request, error_message, start_time)
                 .await;
         }
 
@@ -337,16 +404,13 @@ impl QueryServiceImpl {
             }
         };
 
-        let validation_result = self
-            .validate_query_internal(
-                ValidateQueryRequest {
-                    db_identifier: request.db_identifier.clone(),
-                    query: request.query.clone(),
-                    parameters: request.parameters.clone(),
-                },
-                policy_context,
-            )
-            .await?;
+        let validation_request = ValidateQueryRequest {
+            db_identifier: request.db_identifier.clone(),
+            query: request.query.clone(),
+            parameters: request.parameters.clone(),
+        };
+
+        let validation_result = Self::validate_query_schema(db_path, &validation_request)?;
 
         if !validation_result.valid {
             return self
@@ -546,7 +610,6 @@ async fn execute_query_on_database_async(
 ) -> Result<i64, String> {
     let db_path = db_path.to_string();
     let query = query.to_string();
-
     let task = tokio::task::spawn_blocking(move || {
         execute_query_blocking(&db_path, &query, limit, timeout_seconds)
     });
