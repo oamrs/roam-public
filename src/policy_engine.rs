@@ -521,12 +521,16 @@ fn lex_sql(query: &str) -> LexAnalysis {
         }
 
         if ch == '"' || ch == '`' {
-            index = skip_to_matching_quote(&chars, index + 1, ch);
+            let (identifier, next_index) = read_quoted_identifier(&chars, index + 1, ch);
+            push_identifier_token(&mut analysis, identifier, depth);
+            index = next_index;
             continue;
         }
 
         if ch == '[' {
-            index = skip_to_closing_bracket(&chars, index + 1);
+            let (identifier, next_index) = read_bracket_identifier(&chars, index + 1);
+            push_identifier_token(&mut analysis, identifier, depth);
+            index = next_index;
             continue;
         }
 
@@ -593,26 +597,58 @@ fn skip_single_quoted_literal(chars: &[char], mut index: usize) -> usize {
     chars.len()
 }
 
-fn skip_to_matching_quote(chars: &[char], mut index: usize, quote: char) -> usize {
+fn read_quoted_identifier(chars: &[char], mut index: usize, quote: char) -> (String, usize) {
+    let mut identifier = String::new();
+
     while index < chars.len() {
         if chars[index] == quote {
-            return index + 1;
+            if chars.get(index + 1) == Some(&quote) {
+                identifier.push(quote);
+                index += 2;
+                continue;
+            }
+
+            return (identifier, index + 1);
         }
+
+        identifier.push(chars[index]);
         index += 1;
     }
 
-    chars.len()
+    (identifier, chars.len())
 }
 
-fn skip_to_closing_bracket(chars: &[char], mut index: usize) -> usize {
+fn read_bracket_identifier(chars: &[char], mut index: usize) -> (String, usize) {
+    let mut identifier = String::new();
+
     while index < chars.len() {
         if chars[index] == ']' {
-            return index + 1;
+            if chars.get(index + 1) == Some(&']') {
+                identifier.push(']');
+                index += 2;
+                continue;
+            }
+
+            return (identifier, index + 1);
         }
+
+        identifier.push(chars[index]);
         index += 1;
     }
 
-    chars.len()
+    (identifier, chars.len())
+}
+
+fn push_identifier_token(analysis: &mut LexAnalysis, identifier: String, depth: usize) {
+    let trimmed = identifier.trim();
+    if trimmed.is_empty() {
+        return;
+    }
+
+    analysis.tokens.push(Token {
+        word: trimmed.to_uppercase(),
+        depth,
+    });
 }
 
 fn is_word_start(ch: char) -> bool {

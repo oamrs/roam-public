@@ -119,6 +119,34 @@ fn policy_context_allows_schema_qualified_allowlisted_subquery_shape() {
 }
 
 #[test]
+fn policy_context_allows_quoted_allowlisted_subquery_shape() {
+    let context = PolicyContext {
+        tool: ToolContract {
+            name: "list-users-by-organization".to_string(),
+            intent: ToolIntent::ReadSelect,
+            subquery_policy: SubqueryPolicy::AllowListed(vec![AuthorizedSubqueryShape {
+                table: "organizations".to_string(),
+            }]),
+        },
+        authorization: AuthorizationContext {
+            allowed_intents: vec![ToolIntent::ReadSelect],
+            grants: vec!["tool:users.read".to_string()],
+        },
+    };
+
+    let decision = PolicyEngine::evaluate_with_context(
+        "SELECT id FROM users WHERE organization_id IN (SELECT id FROM \"organizations\")",
+        &context,
+    );
+
+    assert!(
+        decision.allowed,
+        "quoted allow-listed subquery should be permitted"
+    );
+    assert_eq!(decision.classification, "read-select");
+}
+
+#[test]
 fn policy_context_rejects_non_allowlisted_subquery_shape() {
     let context = PolicyContext {
         tool: ToolContract {
@@ -136,6 +164,30 @@ fn policy_context_rejects_non_allowlisted_subquery_shape() {
 
     let decision = PolicyEngine::evaluate_with_context(
         "SELECT id FROM users WHERE organization_id IN (SELECT id FROM departments)",
+        &context,
+    );
+
+    assert_denied(&decision, "departments");
+}
+
+#[test]
+fn policy_context_rejects_quoted_non_allowlisted_subquery_shape() {
+    let context = PolicyContext {
+        tool: ToolContract {
+            name: "list-users-by-organization".to_string(),
+            intent: ToolIntent::ReadSelect,
+            subquery_policy: SubqueryPolicy::AllowListed(vec![AuthorizedSubqueryShape {
+                table: "organizations".to_string(),
+            }]),
+        },
+        authorization: AuthorizationContext {
+            allowed_intents: vec![ToolIntent::ReadSelect],
+            grants: vec!["tool:users.read".to_string()],
+        },
+    };
+
+    let decision = PolicyEngine::evaluate_with_context(
+        "SELECT id FROM users WHERE organization_id IN (SELECT id FROM [departments])",
         &context,
     );
 
