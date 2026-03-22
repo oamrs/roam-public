@@ -268,21 +268,17 @@ impl QueryServiceImpl {
             });
         }
 
-        let query_upper = request.query.to_uppercase();
-
-        if !query_upper.contains("FROM") {
+        let Some(from_pos) = find_top_level_keyword_position(&request.query, "FROM") else {
             return Ok(ValidationResponse {
                 valid: false,
                 error_message: "SELECT statements must include a FROM clause".to_string(),
             });
-        }
+        };
 
         let schema = introspect_sqlite_path(db_path)
             .map_err(|e| format!("Failed to introspect schema: {}", e))?;
 
-        let from_pos = query_upper
-            .find("FROM")
-            .expect("FROM clause existence was checked above");
+        let query_upper = request.query.to_uppercase();
         let after_from_upper = query_upper[from_pos + 4..].trim_start();
         let raw_table_token_upper = after_from_upper.split_whitespace().next().unwrap_or("");
 
@@ -571,6 +567,150 @@ async fn execute_query_on_database_async(
             Err(e) => Err(format!("Task execution error: {}", e)),
         }
     }
+}
+
+fn find_top_level_keyword_position(query: &str, keyword: &str) -> Option<usize> {
+    let chars: Vec<(usize, char)> = query.char_indices().collect();
+    let mut index = 0;
+    let mut depth = 0usize;
+
+    while index < chars.len() {
+        let (_, ch) = chars[index];
+        let next = chars.get(index + 1).map(|(_, next_char)| *next_char);
+
+        if ch == '-' && next == Some('-') {
+            index = skip_line_comment_chars(&chars, index + 2);
+            continue;
+        }
+
+        if ch == '/' && next == Some('*') {
+            index = skip_block_comment_chars(&chars, index + 2);
+            continue;
+        }
+
+        if ch == '\'' {
+            index = skip_single_quoted_literal_chars(&chars, index + 1);
+            continue;
+        }
+
+        if ch == '"' || ch == '`' {
+            index = skip_quoted_identifier_chars(&chars, index + 1, ch);
+            continue;
+        }
+
+        if ch == '[' {
+            index = skip_bracket_identifier_chars(&chars, index + 1);
+            continue;
+        }
+
+        match ch {
+            '(' => {
+                depth += 1;
+                index += 1;
+            }
+            ')' => {
+                depth = depth.saturating_sub(1);
+                index += 1;
+            }
+            _ if depth == 0 && is_executor_word_start(ch) => {
+                let (word, next_index) = read_executor_word(&chars, index);
+                if word.eq_ignore_ascii_case(keyword) {
+                    return Some(chars[index].0);
+                }
+                index = next_index;
+            }
+            _ => {
+                index += 1;
+            }
+        }
+    }
+
+    None
+}
+
+fn skip_line_comment_chars(chars: &[(usize, char)], mut index: usize) -> usize {
+    while index < chars.len() && chars[index].1 != '\n' {
+        index += 1;
+    }
+
+    index
+}
+
+fn skip_block_comment_chars(chars: &[(usize, char)], mut index: usize) -> usize {
+    while index + 1 < chars.len() {
+        if chars[index].1 == '*' && chars[index + 1].1 == '/' {
+            return index + 2;
+        }
+        index += 1;
+    }
+
+    chars.len()
+}
+
+fn skip_single_quoted_literal_chars(chars: &[(usize, char)], mut index: usize) -> usize {
+    while index < chars.len() {
+        if chars[index].1 == '\'' {
+            if chars.get(index + 1).map(|(_, ch)| *ch) == Some('\'') {
+                index += 2;
+                continue;
+            }
+
+            return index + 1;
+        }
+        index += 1;
+    }
+
+    chars.len()
+}
+
+fn skip_quoted_identifier_chars(chars: &[(usize, char)], mut index: usize, quote: char) -> usize {
+    while index < chars.len() {
+        if chars[index].1 == quote {
+            if chars.get(index + 1).map(|(_, ch)| *ch) == Some(quote) {
+                index += 2;
+                continue;
+            }
+
+            return index + 1;
+        }
+        index += 1;
+    }
+
+    chars.len()
+}
+
+fn skip_bracket_identifier_chars(chars: &[(usize, char)], mut index: usize) -> usize {
+    while index < chars.len() {
+        if chars[index].1 == ']' {
+            if chars.get(index + 1).map(|(_, ch)| *ch) == Some(']') {
+                index += 2;
+                continue;
+            }
+
+            return index + 1;
+        }
+        index += 1;
+    }
+
+    chars.len()
+}
+
+fn is_executor_word_start(ch: char) -> bool {
+    ch.is_ascii_alphabetic() || ch == '_'
+}
+
+fn read_executor_word(chars: &[(usize, char)], start: usize) -> (String, usize) {
+    let mut index = start + 1;
+
+    while index < chars.len() && (chars[index].1.is_ascii_alphanumeric() || chars[index].1 == '_') {
+        index += 1;
+    }
+
+    let word = chars[start..index]
+        .iter()
+        .map(|(_, ch)| *ch)
+        .collect::<String>();
+    (word, index)
 }
 
 fn execute_query_blocking(

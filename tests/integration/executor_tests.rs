@@ -262,6 +262,34 @@ async fn query_service_rejects_query_without_from() {
 }
 
 #[tokio::test]
+async fn query_service_accepts_valid_query_with_from_in_alias_before_from_clause() {
+    let tmp = NamedTempFile::new().expect("create tmp file");
+    let db_path = tmp.path().to_str().unwrap();
+
+    let conn = rusqlite::Connection::open(db_path).expect("open db");
+    conn.execute("CREATE TABLE users (id INTEGER PRIMARY KEY, name TEXT)", [])
+        .expect("create users table");
+    drop(conn);
+
+    let mut validator = QueryServiceImpl::new();
+    validator.set_db_path(db_path).expect("set db path");
+
+    let request = ValidateQueryRequest {
+        db_identifier: "test".to_string(),
+        query: "SELECT id AS from_flag FROM users".to_string(),
+        parameters: std::collections::HashMap::new(),
+    };
+
+    let result = validator.validate_query(request).await;
+    assert!(result.is_ok());
+    let response = result.unwrap();
+    assert!(
+        response.valid,
+        "Valid query should not misparse alias containing FROM"
+    );
+}
+
+#[tokio::test]
 async fn query_service_validates_foreign_key_tables() {
     let tmp = NamedTempFile::new().expect("create tmp file");
     let db_path = tmp.path().to_str().unwrap();
