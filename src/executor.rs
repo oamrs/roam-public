@@ -272,8 +272,8 @@ impl QueryServiceImpl {
 
         if !query_upper.contains("FROM") {
             return Ok(ValidationResponse {
-                valid: true,
-                error_message: String::new(),
+                valid: false,
+                error_message: "SELECT statements must include a FROM clause".to_string(),
             });
         }
 

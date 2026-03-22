@@ -184,92 +184,145 @@ impl JsonRpcServer {
         auth_provider: Option<Arc<AuthProvider>>,
         rate_limiter: Option<Arc<RateLimiter>>,
     ) {
-        use tokio::io::{AsyncReadExt, AsyncWriteExt};
-
-        // Check rate limit for new connection
-        if let Some(limiter) = &rate_limiter {
-            if let Err(e) = limiter.check_connection(peer_addr).await {
-                let error_response = json!({
-                    "status": 5,
-                    "error": e,
-                });
-                let response_str = serde_json::to_string(&error_response).unwrap_or_default();
-                let _ = socket.write_all(response_str.as_bytes()).await;
-
-                // Signal connection close
-                if let Some(limiter) = &rate_limiter {
-                    limiter.close_connection(peer_addr).await;
-                }
-                return;
-            }
+        if Self::check_connection_rate_limit(&mut socket, peer_addr, rate_limiter.as_ref())
+            .await
+            .is_err()
+        {
+            Self::close_connection(peer_addr, rate_limiter.as_ref()).await;
+            return;
         }
 
         let mut request_buf = String::new();
         let mut buffer = vec![0u8; 4096];
         loop {
-            match socket.read(&mut buffer).await {
-                Ok(0) => {
-                    // Connection closed by peer before a full JSON document was received.
-                    break;
-                }
-                Ok(n) => {
-                    // Check rate limit for request
-                    if let Some(limiter) = &rate_limiter {
-                        if let Err(e) = limiter.check_request(peer_addr).await {
-                            let error_response = json!({
-                                "status": 5,
-                                "error": e,
-                            });
-                            let response_str =
-                                serde_json::to_string(&error_response).unwrap_or_default();
-                            let _ = socket.write_all(response_str.as_bytes()).await;
-                            break;
-                        }
-                    }
+            let Some(read_size) = Self::read_request_chunk(&mut socket, &mut buffer).await else {
+                break;
+            };
 
-                    // Append the newly read bytes to the request buffer.
-                    request_buf.push_str(&String::from_utf8_lossy(&buffer[..n]));
-                    // Try to parse the accumulated buffer as JSON.
-                    match serde_json::from_str::<Value>(&request_buf) {
-                        Ok(request) => {
-                            let response = Self::route_request(
-                                &request,
-                                &query_service,
-                                &schema_service,
-                                &auth_provider,
-                            )
-                            .await;
-                            let response_str = serde_json::to_string(&response).unwrap_or_default();
-                            let _ = socket.write_all(response_str.as_bytes()).await;
-                            break;
-                        }
-                        Err(err) if err.is_eof() => {
-                            // JSON is incomplete; continue reading more data.
-                            continue;
-                        }
-                        Err(err) => {
-                            // Malformed JSON: send error response instead of silently closing.
-                            // Clients need feedback to diagnose and fix their requests.
-                            let error_response = json!({
-                                "status": 3,
-                                "error": format!("Invalid JSON: {}", err),
-                            });
-                            let response_str =
-                                serde_json::to_string(&error_response).unwrap_or_default();
-                            let _ = socket.write_all(response_str.as_bytes()).await;
-                            break;
-                        }
-                    }
-                }
-                Err(_e) => {
-                    // I/O error while reading from socket; stop processing.
-                    break;
-                }
+            if Self::check_request_rate_limit(&mut socket, peer_addr, rate_limiter.as_ref())
+                .await
+                .is_err()
+            {
+                break;
+            }
+
+            request_buf.push_str(&String::from_utf8_lossy(&buffer[..read_size]));
+
+            if Self::process_request_buffer(
+                &mut socket,
+                &request_buf,
+                &query_service,
+                &schema_service,
+                &auth_provider,
+            )
+            .await
+            {
+                break;
             }
         }
 
-        // Signal connection close
-        if let Some(limiter) = &rate_limiter {
+        Self::close_connection(peer_addr, rate_limiter.as_ref()).await;
+    }
+
+    async fn read_request_chunk(
+        socket: &mut tokio::net::TcpStream,
+        buffer: &mut [u8],
+    ) -> Option<usize> {
+        use tokio::io::AsyncReadExt;
+
+        match socket.read(buffer).await {
+            Ok(0) | Err(_) => None,
+            Ok(read_size) => Some(read_size),
+        }
+    }
+
+    async fn check_connection_rate_limit(
+        socket: &mut tokio::net::TcpStream,
+        peer_addr: SocketAddr,
+        rate_limiter: Option<&Arc<RateLimiter>>,
+    ) -> Result<(), ()> {
+        let Some(limiter) = rate_limiter else {
+            return Ok(());
+        };
+
+        if let Err(error) = limiter.check_connection(peer_addr).await {
+            Self::write_json(
+                socket,
+                &json!({
+                    "status": 5,
+                    "error": error,
+                }),
+            )
+            .await;
+            return Err(());
+        }
+
+        Ok(())
+    }
+
+    async fn check_request_rate_limit(
+        socket: &mut tokio::net::TcpStream,
+        peer_addr: SocketAddr,
+        rate_limiter: Option<&Arc<RateLimiter>>,
+    ) -> Result<(), ()> {
+        let Some(limiter) = rate_limiter else {
+            return Ok(());
+        };
+
+        if let Err(error) = limiter.check_request(peer_addr).await {
+            Self::write_json(
+                socket,
+                &json!({
+                    "status": 5,
+                    "error": error,
+                }),
+            )
+            .await;
+            return Err(());
+        }
+
+        Ok(())
+    }
+
+    async fn process_request_buffer(
+        socket: &mut tokio::net::TcpStream,
+        request_buf: &str,
+        query_service: &Arc<QueryServiceImpl>,
+        schema_service: &Arc<SchemaServiceImpl>,
+        auth_provider: &Option<Arc<AuthProvider>>,
+    ) -> bool {
+        match serde_json::from_str::<Value>(request_buf) {
+            Ok(request) => {
+                let response =
+                    Self::route_request(&request, query_service, schema_service, auth_provider)
+                        .await;
+                Self::write_json(socket, &response).await;
+                true
+            }
+            Err(err) if err.is_eof() => false,
+            Err(err) => {
+                Self::write_json(
+                    socket,
+                    &json!({
+                        "status": 3,
+                        "error": format!("Invalid JSON: {}", err),
+                    }),
+                )
+                .await;
+                true
+            }
+        }
+    }
+
+    async fn write_json(socket: &mut tokio::net::TcpStream, payload: &Value) {
+        use tokio::io::AsyncWriteExt;
+
+        let response_str = serde_json::to_string(payload).unwrap_or_default();
+        let _ = socket.write_all(response_str.as_bytes()).await;
+    }
+
+    async fn close_connection(peer_addr: SocketAddr, rate_limiter: Option<&Arc<RateLimiter>>) {
+        if let Some(limiter) = rate_limiter {
             limiter.close_connection(peer_addr).await;
         }
     }

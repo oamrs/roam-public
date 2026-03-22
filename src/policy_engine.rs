@@ -55,8 +55,9 @@ pub struct AuthorizedSubqueryShape {
     pub table: String,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
 pub enum SubqueryPolicy {
+    #[default]
     DenyAll,
     AllowListed(Vec<AuthorizedSubqueryShape>),
 }
@@ -111,12 +112,6 @@ struct SqlAnalysis {
     has_line_comment: bool,
     has_block_comment: bool,
     has_semicolon: bool,
-}
-
-impl Default for SubqueryPolicy {
-    fn default() -> Self {
-        Self::DenyAll
-    }
 }
 
 impl AuthorizationContext {
@@ -182,7 +177,7 @@ impl PolicyEngine {
         }
 
         if analysis.has_semicolon {
-            return Self::deny("invalid", "Command chaining is not allowed");
+            return Self::deny("invalid", "Semicolon-based command chaining is not allowed");
         }
 
         if let Some(reason) = Self::detect_injection_heuristics(&analysis.normalized_query) {
@@ -234,7 +229,7 @@ impl PolicyEngine {
             return Self::deny(
                 &format!("write-{}", keyword.to_lowercase()),
                 &format!(
-                    "Write operation is not allowed for read-select intent: {}",
+                    "DML write operation is not allowed for read-select intent: {}",
                     keyword.to_lowercase()
                 ),
             );
@@ -260,6 +255,10 @@ impl PolicyEngine {
                     keyword.to_lowercase()
                 ),
             );
+        }
+
+        if Self::find_top_level_keyword(&analysis.tokens, &["FROM"]).is_none() {
+            return Self::deny("invalid", "SELECT statements must include a FROM clause");
         }
 
         if let Some(decision) = Self::evaluate_subquery_policy(&analysis, subquery_policy) {
@@ -487,106 +486,130 @@ fn lex_sql(query: &str) -> LexAnalysis {
 
         if ch == '-' && next == Some('-') {
             analysis.has_line_comment = true;
-            index += 2;
-            while index < chars.len() && chars[index] != '\n' {
-                index += 1;
-            }
+            index = skip_line_comment(&chars, index + 2);
             continue;
         }
 
         if ch == '/' && next == Some('*') {
             analysis.has_block_comment = true;
-            index += 2;
-            while index + 1 < chars.len() {
-                if chars[index] == '*' && chars[index + 1] == '/' {
-                    index += 2;
-                    break;
-                }
-                index += 1;
-            }
+            index = skip_block_comment(&chars, index + 2);
             continue;
         }
 
         if ch == '\'' {
-            index += 1;
-            while index < chars.len() {
-                if chars[index] == '\'' {
-                    if chars.get(index + 1) == Some(&'\'') {
-                        index += 2;
-                        continue;
-                    }
-                    index += 1;
-                    break;
-                }
-                index += 1;
-            }
+            index = skip_single_quoted_literal(&chars, index + 1);
             continue;
         }
 
         if ch == '"' || ch == '`' {
-            let quote = ch;
-            index += 1;
-            while index < chars.len() {
-                if chars[index] == quote {
-                    index += 1;
-                    break;
-                }
-                index += 1;
-            }
+            index = skip_to_matching_quote(&chars, index + 1, ch);
             continue;
         }
 
         if ch == '[' {
-            index += 1;
-            while index < chars.len() {
-                if chars[index] == ']' {
-                    index += 1;
-                    break;
-                }
+            index = skip_to_closing_bracket(&chars, index + 1);
+            continue;
+        }
+
+        match ch {
+            ';' => {
+                analysis.has_semicolon = true;
                 index += 1;
             }
-            continue;
-        }
-
-        if ch == ';' {
-            analysis.has_semicolon = true;
-            index += 1;
-            continue;
-        }
-
-        if ch == '(' {
-            depth += 1;
-            index += 1;
-            continue;
-        }
-
-        if ch == ')' {
-            depth = depth.saturating_sub(1);
-            index += 1;
-            continue;
-        }
-
-        if ch.is_ascii_alphabetic() || ch == '_' {
-            let start = index;
-            index += 1;
-            while index < chars.len()
-                && (chars[index].is_ascii_alphanumeric() || chars[index] == '_')
-            {
+            '(' => {
+                depth += 1;
                 index += 1;
             }
+            ')' => {
+                depth = depth.saturating_sub(1);
+                index += 1;
+            }
+            _ if is_word_start(ch) => {
+                let (word, next_index) = read_word(&chars, index);
+                analysis.tokens.push(Token { word, depth });
+                index = next_index;
+            }
+            _ => {
+                index += 1;
+            }
+        }
+    }
 
-            analysis.tokens.push(Token {
-                word: chars[start..index]
-                    .iter()
-                    .collect::<String>()
-                    .to_uppercase(),
-                depth,
-            });
-            continue;
+    analysis
+}
+
+fn skip_line_comment(chars: &[char], mut index: usize) -> usize {
+    while index < chars.len() && chars[index] != '\n' {
+        index += 1;
+    }
+
+    index
+}
+
+fn skip_block_comment(chars: &[char], mut index: usize) -> usize {
+    while index + 1 < chars.len() {
+        if chars[index] == '*' && chars[index + 1] == '/' {
+            return index + 2;
+        }
+        index += 1;
+    }
+
+    chars.len()
+}
+
+fn skip_single_quoted_literal(chars: &[char], mut index: usize) -> usize {
+    while index < chars.len() {
+        if chars[index] == '\'' {
+            if chars.get(index + 1) == Some(&'\'') {
+                index += 2;
+                continue;
+            }
+
+            return index + 1;
         }
 
         index += 1;
     }
 
-    analysis
+    chars.len()
+}
+
+fn skip_to_matching_quote(chars: &[char], mut index: usize, quote: char) -> usize {
+    while index < chars.len() {
+        if chars[index] == quote {
+            return index + 1;
+        }
+        index += 1;
+    }
+
+    chars.len()
+}
+
+fn skip_to_closing_bracket(chars: &[char], mut index: usize) -> usize {
+    while index < chars.len() {
+        if chars[index] == ']' {
+            return index + 1;
+        }
+        index += 1;
+    }
+
+    chars.len()
+}
+
+fn is_word_start(ch: char) -> bool {
+    ch.is_ascii_alphabetic() || ch == '_'
+}
+
+fn read_word(chars: &[char], start: usize) -> (String, usize) {
+    let mut index = start + 1;
+
+    while index < chars.len() && (chars[index].is_ascii_alphanumeric() || chars[index] == '_') {
+        index += 1;
+    }
+
+    let word = chars[start..index]
+        .iter()
+        .collect::<String>()
+        .to_uppercase();
+    (word, index)
 }
