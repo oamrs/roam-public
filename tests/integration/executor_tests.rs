@@ -919,6 +919,7 @@ async fn query_service_dispatches_query_executed_event_on_db_success() {
         row_count,
         execution_ms: _,
         timestamp: _,
+        context: _,
     } = test_events[0]
     {
         assert_eq!(db_identifier, &test_db_id);
@@ -997,6 +998,7 @@ async fn query_service_dispatches_query_validation_failed_event_on_db_validation
             query: _,
             error_reason,
             timestamp: _,
+            context: _,
         } => {
             assert_eq!(db_identifier, test_db_id);
             assert!(!error_reason.is_empty());
@@ -1073,6 +1075,7 @@ async fn query_service_dispatches_query_execution_error_event_on_db_execution_fa
             query: _,
             error_message,
             timestamp: _,
+            context: _,
         } => {
             assert_eq!(db_identifier, test_db_id);
             assert!(!error_message.is_empty());
@@ -1147,6 +1150,7 @@ async fn query_service_events_include_complete_execution_metadata() {
             row_count,
             execution_ms,
             timestamp,
+            context: _,
         } => {
             assert_eq!(db_identifier, test_db_id);
             assert_eq!(query, "SELECT * FROM test_table");

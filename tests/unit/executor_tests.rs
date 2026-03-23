@@ -6,6 +6,7 @@ use oam::policy_engine::{
     AuthorizationContext, AuthorizedSubqueryShape, PolicyContext, SubqueryPolicy, ToolContract,
     ToolIntent,
 };
+use oam::QueryRuntimeContext;
 
 #[tokio::test]
 async fn schema_service_can_be_created() {
@@ -487,6 +488,7 @@ async fn query_service_dispatches_validation_failed_on_command_chaining() {
         query: _,
         error_reason,
         timestamp: _,
+        context: _,
     } = test_events[0]
     {
         assert_eq!(db_identifier, &test_db_id);
@@ -597,6 +599,7 @@ async fn query_service_dispatches_execution_error_on_missing_db_path() {
         query: _,
         error_message,
         timestamp: _,
+        context: _,
     } = test_events[0]
     {
         assert_eq!(db_identifier, &test_db_id);
@@ -651,6 +654,7 @@ async fn query_service_execution_error_event_includes_query_details() {
         query,
         error_message,
         timestamp,
+        context: _,
     } = test_events[0]
     {
         assert_eq!(db_identifier, &test_db_id);
@@ -721,4 +725,61 @@ async fn query_service_different_violations_dispatch_correct_events() {
             _ => panic!("Expected QueryValidationFailed events"),
         }
     }
+}
+
+#[tokio::test]
+async fn query_service_runtime_context_is_emitted_in_query_events() {
+    use oam::interceptor::get_event_bus;
+    use oam::Event;
+
+    let event_bus = get_event_bus();
+    let _ = event_bus.clear();
+
+    let service = QueryServiceImpl::new();
+    let test_db_id = "1e6_runtime_context".to_string();
+
+    let request = ExecuteQueryRequest {
+        db_identifier: test_db_id.clone(),
+        query: "SELECT * FROM users; DROP TABLE users;".to_string(),
+        parameters: std::collections::HashMap::new(),
+        limit: 100,
+        timeout_seconds: 30,
+    };
+
+    let runtime_context = QueryRuntimeContext {
+        session_id: Some("session-456".to_string()),
+        organization_id: Some("finance".to_string()),
+        tool_name: Some("finance.query".to_string()),
+        prompt_selector_key: Some("finance-default".to_string()),
+        ..Default::default()
+    };
+
+    let response = service
+        .execute_query_with_runtime_context(request, runtime_context)
+        .await
+        .expect("response");
+    assert_eq!(response.status, QueryStatus::ValidationError as i32);
+
+    let events = event_bus.all_events().expect("get generic events");
+    let event = events
+        .iter()
+        .find(|event| {
+            matches!(event, Event::QueryValidationFailed { db_identifier, .. } if db_identifier == &test_db_id)
+        })
+        .expect("validation failed event");
+
+    let metadata = event.metadata();
+    assert_eq!(metadata.get("session_id"), Some(&"session-456".to_string()));
+    assert_eq!(
+        metadata.get("organization_id"),
+        Some(&"finance".to_string())
+    );
+    assert_eq!(
+        metadata.get("tool_name"),
+        Some(&"finance.query".to_string())
+    );
+    assert_eq!(
+        metadata.get("prompt_selector_key"),
+        Some(&"finance-default".to_string())
+    );
 }

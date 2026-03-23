@@ -7,6 +7,7 @@ pub mod interceptor;
 pub mod mapper;
 pub mod mirror;
 pub mod policy_engine;
+pub mod runtime_context;
 pub mod tcp;
 
 // Re-export commonly used types
@@ -27,6 +28,7 @@ pub use policy_engine::{
     AuthorizationContext, AuthorizedSubqueryShape, PolicyContext, PolicyDecision, PolicyEngine,
     SubqueryPolicy, ToolContract, ToolIntent,
 };
+pub use runtime_context::QueryRuntimeContext;
 pub use tcp::{
     ApiKeyAuth, AuthProvider, AuthenticatedClient, JsonRpcClient, JsonRpcServer,
     JsonRpcServerConfig, RateLimitConfig, RateLimiter, RateLimiterStats, TokenAuth,

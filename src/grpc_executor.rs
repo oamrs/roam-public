@@ -1,8 +1,9 @@
 use crate::executor::{
     ExecuteQueryRequest, GetSchemaRequest as ExecGetSchemaRequest,
-    GetTableRequest as ExecGetTableRequest, QueryService, QueryServiceImpl, SchemaService,
-    SchemaServiceImpl, ValidateQueryRequest,
+    GetTableRequest as ExecGetTableRequest, QueryServiceImpl, SchemaService, SchemaServiceImpl,
+    ValidateQueryRequest,
 };
+use crate::runtime_context::QueryRuntimeContext;
 use std::sync::Arc;
 use tokio::sync::Mutex;
 use tonic::{transport::Server, Request, Response, Status};
@@ -115,6 +116,7 @@ impl ProtoQueryService for GrpcQueryServiceImpl {
         &self,
         request: Request<ProtoExecuteQueryRequest>,
     ) -> Result<Response<ProtoExecuteQueryResponse>, Status> {
+        let runtime_context = QueryRuntimeContext::from_metadata(request.metadata());
         let req = request.into_inner();
 
         let exec_req = ExecuteQueryRequest {
@@ -134,7 +136,10 @@ impl ProtoQueryService for GrpcQueryServiceImpl {
         // Failure to implement this allows malicious clients to bypass schema restrictions.
 
         let service = self.inner.lock().await;
-        match service.execute_query(exec_req).await {
+        match service
+            .execute_query_with_runtime_context(exec_req, runtime_context)
+            .await
+        {
             Ok(resp) => Ok(Response::new(ProtoExecuteQueryResponse {
                 status: resp.status,
                 row_count: resp.row_count,
@@ -150,6 +155,7 @@ impl ProtoQueryService for GrpcQueryServiceImpl {
         &self,
         request: Request<ProtoValidateQueryRequest>,
     ) -> Result<Response<ValidationResponse>, Status> {
+        let runtime_context = QueryRuntimeContext::from_metadata(request.metadata());
         let req = request.into_inner();
 
         let exec_req = ValidateQueryRequest {
@@ -163,7 +169,10 @@ impl ProtoQueryService for GrpcQueryServiceImpl {
         // Requires resolving the agent's session/mode and registry from request metadata.
 
         let service = self.inner.lock().await;
-        match service.validate_query(exec_req).await {
+        match service
+            .validate_query_with_runtime_context(exec_req, runtime_context)
+            .await
+        {
             Ok(resp) => Ok(Response::new(ValidationResponse {
                 valid: resp.valid,
                 error_message: resp.error_message,

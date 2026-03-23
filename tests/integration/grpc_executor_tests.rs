@@ -1,4 +1,5 @@
 use oam::grpc_executor::GrpcExecutor;
+use oam::interceptor::get_event_bus;
 use roam_proto::v1::query::query_service_client::QueryServiceClient;
 use roam_proto::v1::query::ExecuteQueryRequest;
 use roam_proto::v1::schema::schema_service_client::SchemaServiceClient;
@@ -214,6 +215,83 @@ async fn query_service_handles_requests() {
             // Connection failed, which is acceptable in test environment
         }
     }
+
+    drop(handle);
+}
+
+#[tokio::test]
+async fn grpc_query_metadata_is_forwarded_into_query_events() {
+    let event_bus = get_event_bus();
+    let _ = event_bus.clear();
+
+    let db_path = test_db_path();
+    let executor = GrpcExecutor::new(&db_path).expect("Failed to create GrpcExecutor");
+
+    let port = get_available_port().expect("Failed to get available port");
+    let addr_str = format!("127.0.0.1:{}", port);
+
+    let handle = executor
+        .start_server(&addr_str)
+        .await
+        .expect("Failed to start server");
+
+    tokio::time::sleep(Duration::from_millis(200)).await;
+
+    let addr = format!("http://127.0.0.1:{}", port);
+    let mut client = QueryServiceClient::connect(addr)
+        .await
+        .expect("connect query client");
+
+    let mut request = tonic::Request::new(ExecuteQueryRequest {
+        db_identifier: "grpc-context-db".to_string(),
+        query: "SELECT * FROM users; DROP TABLE users;".to_string(),
+        limit: 10,
+        timeout_seconds: 5,
+    });
+    request
+        .metadata_mut()
+        .insert("x-roam-session-id", "session-grpc".parse().unwrap());
+    request
+        .metadata_mut()
+        .insert("x-roam-organization-id", "finance".parse().unwrap());
+    request
+        .metadata_mut()
+        .insert("x-roam-tool-name", "finance.query".parse().unwrap());
+    request.metadata_mut().insert(
+        "x-roam-prompt-selector-key",
+        "finance-default".parse().unwrap(),
+    );
+
+    let _response = client
+        .execute_query(request)
+        .await
+        .expect("execute query rpc");
+
+    let events = event_bus.all_events().expect("get events");
+    let event = events
+        .iter()
+        .find(|event| {
+            matches!(event, oam::Event::QueryValidationFailed { db_identifier, .. } if db_identifier == "grpc-context-db")
+        })
+        .expect("grpc validation failed event");
+
+    let metadata = event.metadata();
+    assert_eq!(
+        metadata.get("session_id"),
+        Some(&"session-grpc".to_string())
+    );
+    assert_eq!(
+        metadata.get("organization_id"),
+        Some(&"finance".to_string())
+    );
+    assert_eq!(
+        metadata.get("tool_name"),
+        Some(&"finance.query".to_string())
+    );
+    assert_eq!(
+        metadata.get("prompt_selector_key"),
+        Some(&"finance-default".to_string())
+    );
 
     drop(handle);
 }

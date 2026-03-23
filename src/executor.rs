@@ -1,4 +1,5 @@
 use crate::policy_engine::{PolicyContext, PolicyEngine, ToolIntent};
+use crate::runtime_context::QueryRuntimeContext;
 use once_cell::sync::Lazy;
 use rusqlite::Connection;
 use serde::{Deserialize, Serialize};
@@ -231,7 +232,17 @@ impl QueryServiceImpl {
         request: ValidateQueryRequest,
         policy_context: PolicyContext,
     ) -> Result<ValidationResponse, String> {
-        self.validate_query_internal(request, Some(&policy_context))
+        self.validate_query_internal(request, Some(&policy_context), None)
+            .await
+    }
+
+    pub async fn validate_query_with_runtime_context(
+        &self,
+        request: ValidateQueryRequest,
+        runtime_context: QueryRuntimeContext,
+    ) -> Result<ValidationResponse, String> {
+        let policy_context = runtime_context.policy_context();
+        self.validate_query_internal(request, policy_context.as_ref(), Some(&runtime_context))
             .await
     }
 
@@ -240,7 +251,17 @@ impl QueryServiceImpl {
         request: ExecuteQueryRequest,
         policy_context: PolicyContext,
     ) -> Result<ExecuteQueryResponse, String> {
-        self.execute_query_internal(request, Some(&policy_context))
+        self.execute_query_internal(request, Some(&policy_context), None)
+            .await
+    }
+
+    pub async fn execute_query_with_runtime_context(
+        &self,
+        request: ExecuteQueryRequest,
+        runtime_context: QueryRuntimeContext,
+    ) -> Result<ExecuteQueryResponse, String> {
+        let policy_context = runtime_context.policy_context();
+        self.execute_query_internal(request, policy_context.as_ref(), Some(&runtime_context))
             .await
     }
 
@@ -248,6 +269,7 @@ impl QueryServiceImpl {
         &self,
         request: ValidateQueryRequest,
         policy_context: Option<&PolicyContext>,
+        _runtime_context: Option<&QueryRuntimeContext>,
     ) -> Result<ValidationResponse, String> {
         let db_path = match &self.db_path {
             Some(path) => path,
@@ -385,12 +407,18 @@ impl QueryServiceImpl {
         &self,
         request: ExecuteQueryRequest,
         policy_context: Option<&PolicyContext>,
+        runtime_context: Option<&QueryRuntimeContext>,
     ) -> Result<ExecuteQueryResponse, String> {
         let start_time = std::time::Instant::now();
 
         if let Some(error_message) = Self::validate_query_policy(&request.query, policy_context) {
             return self
-                .build_validation_error_response(&request, error_message, start_time)
+                .build_validation_error_response(
+                    &request,
+                    error_message,
+                    start_time,
+                    runtime_context,
+                )
                 .await;
         }
 
@@ -399,7 +427,12 @@ impl QueryServiceImpl {
             None => {
                 let error_msg = "Database path not configured".to_string();
                 return self
-                    .build_execution_error_response(&request, error_msg, start_time)
+                    .build_execution_error_response(
+                        &request,
+                        error_msg,
+                        start_time,
+                        runtime_context,
+                    )
                     .await;
             }
         };
@@ -418,6 +451,7 @@ impl QueryServiceImpl {
                     &request,
                     validation_result.error_message,
                     start_time,
+                    runtime_context,
                 )
                 .await;
         }
@@ -430,7 +464,7 @@ impl QueryServiceImpl {
         )
         .await;
 
-        self.build_execution_response(&request, execution_result, start_time)
+        self.build_execution_response(&request, execution_result, start_time, runtime_context)
             .await
     }
 
@@ -439,6 +473,7 @@ impl QueryServiceImpl {
         request: &ExecuteQueryRequest,
         error_message: String,
         start_time: std::time::Instant,
+        runtime_context: Option<&QueryRuntimeContext>,
     ) -> Result<ExecuteQueryResponse, String> {
         use crate::interceptor::{get_event_bus, Event};
         use chrono::Utc;
@@ -451,6 +486,9 @@ impl QueryServiceImpl {
             request.query.clone(),
             error_message.clone(),
             timestamp.clone(),
+            runtime_context
+                .map(QueryRuntimeContext::event_metadata)
+                .unwrap_or_default(),
         );
         if let Err(e) = get_event_bus().dispatch_generic(&event) {
             eprintln!("Event dispatch failed for query_validation_failed: {}", e);
@@ -470,6 +508,7 @@ impl QueryServiceImpl {
         request: &ExecuteQueryRequest,
         error_message: String,
         start_time: std::time::Instant,
+        runtime_context: Option<&QueryRuntimeContext>,
     ) -> Result<ExecuteQueryResponse, String> {
         use crate::interceptor::{get_event_bus, Event};
         use chrono::Utc;
@@ -482,6 +521,9 @@ impl QueryServiceImpl {
             request.query.clone(),
             error_message.clone(),
             timestamp.clone(),
+            runtime_context
+                .map(QueryRuntimeContext::event_metadata)
+                .unwrap_or_default(),
         );
         if let Err(e) = get_event_bus().dispatch_generic(&event) {
             eprintln!("Event dispatch failed for query_execution_error: {}", e);
@@ -501,6 +543,7 @@ impl QueryServiceImpl {
         request: &ExecuteQueryRequest,
         execution_result: Result<i64, String>,
         start_time: std::time::Instant,
+        runtime_context: Option<&QueryRuntimeContext>,
     ) -> Result<ExecuteQueryResponse, String> {
         use crate::interceptor::{get_event_bus, Event};
         use chrono::Utc;
@@ -517,6 +560,9 @@ impl QueryServiceImpl {
                     row_count as i32,
                     execution_ms,
                     timestamp.clone(),
+                    runtime_context
+                        .map(QueryRuntimeContext::event_metadata)
+                        .unwrap_or_default(),
                 );
                 if let Err(e) = get_event_bus().dispatch_generic(&event) {
                     eprintln!("Event dispatch failed for query_executed: {}", e);
@@ -531,8 +577,14 @@ impl QueryServiceImpl {
                 })
             }
             Err(e) => {
-                self.handle_execution_error(request.clone(), e, execution_ms, timestamp)
-                    .await
+                self.handle_execution_error(
+                    request.clone(),
+                    e,
+                    execution_ms,
+                    timestamp,
+                    runtime_context,
+                )
+                .await
             }
         }
     }
@@ -543,6 +595,7 @@ impl QueryServiceImpl {
         error: String,
         execution_ms: i32,
         timestamp: String,
+        runtime_context: Option<&QueryRuntimeContext>,
     ) -> Result<ExecuteQueryResponse, String> {
         use crate::interceptor::{get_event_bus, Event};
 
@@ -561,6 +614,9 @@ impl QueryServiceImpl {
             request.query.clone(),
             error.clone(),
             timestamp.clone(),
+            runtime_context
+                .map(QueryRuntimeContext::event_metadata)
+                .unwrap_or_default(),
         );
         if let Err(e) = get_event_bus().dispatch_generic(&event) {
             eprintln!(
@@ -591,14 +647,14 @@ impl QueryService for QueryServiceImpl {
         &self,
         request: ValidateQueryRequest,
     ) -> Result<ValidationResponse, String> {
-        self.validate_query_internal(request, None).await
+        self.validate_query_internal(request, None, None).await
     }
 
     async fn execute_query(
         &self,
         request: ExecuteQueryRequest,
     ) -> Result<ExecuteQueryResponse, String> {
-        self.execute_query_internal(request, None).await
+        self.execute_query_internal(request, None, None).await
     }
 }
 

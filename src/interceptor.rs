@@ -47,6 +47,8 @@ pub enum Event {
         row_count: i32,
         execution_ms: i32,
         timestamp: String,
+        #[serde(default, skip_serializing_if = "HashMap::is_empty")]
+        context: HashMap<String, String>,
     },
     #[serde(rename = "QueryValidationFailed")]
     QueryValidationFailed {
@@ -54,6 +56,8 @@ pub enum Event {
         query: String,
         error_reason: String,
         timestamp: String,
+        #[serde(default, skip_serializing_if = "HashMap::is_empty")]
+        context: HashMap<String, String>,
     },
     #[serde(rename = "QueryExecutionError")]
     QueryExecutionError {
@@ -61,6 +65,8 @@ pub enum Event {
         query: String,
         error_message: String,
         timestamp: String,
+        #[serde(default, skip_serializing_if = "HashMap::is_empty")]
+        context: HashMap<String, String>,
     },
     #[serde(rename = "ModelChanged")]
     ModelChanged {
@@ -127,6 +133,7 @@ impl Event {
         row_count: i32,
         execution_ms: i32,
         timestamp: String,
+        context: HashMap<String, String>,
     ) -> Self {
         Event::QueryExecuted {
             db_identifier,
@@ -135,6 +142,7 @@ impl Event {
             row_count,
             execution_ms,
             timestamp,
+            context,
         }
     }
 
@@ -143,12 +151,14 @@ impl Event {
         query: String,
         error_reason: String,
         timestamp: String,
+        context: HashMap<String, String>,
     ) -> Self {
         Event::QueryValidationFailed {
             db_identifier,
             query,
             error_reason,
             timestamp,
+            context,
         }
     }
 
@@ -157,12 +167,14 @@ impl Event {
         query: String,
         error_message: String,
         timestamp: String,
+        context: HashMap<String, String>,
     ) -> Self {
         Event::QueryExecutionError {
             db_identifier,
             query,
             error_message,
             timestamp,
+            context,
         }
     }
 
@@ -238,6 +250,7 @@ impl Event {
                 row_count,
                 execution_ms,
                 timestamp,
+                context,
             } => {
                 map.insert("db_identifier".to_string(), db_identifier.clone());
                 map.insert("query".to_string(), query.clone());
@@ -245,28 +258,33 @@ impl Event {
                 map.insert("row_count".to_string(), row_count.to_string());
                 map.insert("execution_ms".to_string(), execution_ms.to_string());
                 map.insert("timestamp".to_string(), timestamp.clone());
+                map.extend(context.clone());
             }
             Event::QueryValidationFailed {
                 db_identifier,
                 query,
                 error_reason,
                 timestamp,
+                context,
             } => {
                 map.insert("db_identifier".to_string(), db_identifier.clone());
                 map.insert("query".to_string(), query.clone());
                 map.insert("error_reason".to_string(), error_reason.clone());
                 map.insert("timestamp".to_string(), timestamp.clone());
+                map.extend(context.clone());
             }
             Event::QueryExecutionError {
                 db_identifier,
                 query,
                 error_message,
                 timestamp,
+                context,
             } => {
                 map.insert("db_identifier".to_string(), db_identifier.clone());
                 map.insert("query".to_string(), query.clone());
                 map.insert("error_message".to_string(), error_message.clone());
                 map.insert("timestamp".to_string(), timestamp.clone());
+                map.extend(context.clone());
             }
             Event::ModelChanged {
                 entity_type,
