@@ -79,6 +79,7 @@ async fn after_save_hook_ignores_non_critical_status() {
     assert_eq!(events.len(), 0);
 }
 
+#[serial_test::serial(event_bus)]
 #[tokio::test]
 async fn model_after_save_hook_integration() {
     let _lock = _acquire_test_lock();
@@ -105,6 +106,7 @@ async fn model_after_save_hook_integration() {
     event_bus.clear().unwrap();
 }
 
+#[serial_test::serial(event_bus)]
 #[tokio::test]
 async fn active_model_behavior_auto_dispatches_critical_on_save() {
     let _lock = _acquire_test_lock();
@@ -135,6 +137,7 @@ async fn active_model_behavior_auto_dispatches_critical_on_save() {
     event_bus.clear().unwrap();
 }
 
+#[serial_test::serial(event_bus)]
 #[tokio::test]
 async fn active_model_behavior_filters_non_critical_status() {
     let _lock = _acquire_test_lock();
@@ -163,6 +166,7 @@ async fn active_model_behavior_filters_non_critical_status() {
     event_bus.clear().unwrap();
 }
 
+#[serial_test::serial(event_bus)]
 #[tokio::test]
 async fn active_model_behavior_sets_event_metadata() {
     let _lock = _acquire_test_lock();

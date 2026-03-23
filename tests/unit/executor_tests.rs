@@ -440,6 +440,7 @@ async fn query_service_execute_query_limit_parameter_processed() {
     );
 }
 
+#[serial_test::serial(event_bus)]
 #[tokio::test]
 async fn query_service_dispatches_validation_failed_on_command_chaining() {
     use oam::interceptor::get_event_bus;
@@ -498,6 +499,7 @@ async fn query_service_dispatches_validation_failed_on_command_chaining() {
     }
 }
 
+#[serial_test::serial(event_bus)]
 #[tokio::test]
 async fn query_service_validation_failed_event_includes_metadata() {
     use oam::interceptor::get_event_bus;
@@ -551,6 +553,7 @@ async fn query_service_validation_failed_event_includes_metadata() {
     );
 }
 
+#[serial_test::serial(event_bus)]
 #[tokio::test]
 async fn query_service_dispatches_execution_error_on_missing_db_path() {
     use oam::interceptor::get_event_bus;
@@ -613,6 +616,7 @@ async fn query_service_dispatches_execution_error_on_missing_db_path() {
     }
 }
 
+#[serial_test::serial(event_bus)]
 #[tokio::test]
 async fn query_service_execution_error_event_includes_query_details() {
     use oam::interceptor::get_event_bus;
@@ -666,6 +670,7 @@ async fn query_service_execution_error_event_includes_query_details() {
     }
 }
 
+#[serial_test::serial(event_bus)]
 #[tokio::test]
 async fn query_service_different_violations_dispatch_correct_events() {
     use oam::interceptor::get_event_bus;
@@ -727,6 +732,7 @@ async fn query_service_different_violations_dispatch_correct_events() {
     }
 }
 
+#[serial_test::serial(event_bus)]
 #[tokio::test]
 async fn query_service_runtime_context_is_emitted_in_query_events() {
     use oam::interceptor::get_event_bus;

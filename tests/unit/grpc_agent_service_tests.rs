@@ -43,6 +43,7 @@ async fn grpc_agent_registration_returns_valid_session_id() {
     assert_eq!(session.schema_mode, SchemaMode::DataFirst);
 }
 
+#[serial_test::serial(event_bus)]
 #[tokio::test]
 async fn grpc_agent_stream_events_returns_session_filtered_events() {
     let event_bus = get_event_bus();

@@ -1,7 +1,11 @@
 use crate::policy_engine::{
     AuthorizationContext, PolicyContext, SubqueryPolicy, ToolContract, ToolIntent,
 };
+use crate::prompt_hooks::{
+    PromptHookRequestContext, PromptHookResolveRequest, PromptHookSchemaContext,
+};
 use serde::{Deserialize, Serialize};
+use std::collections::BTreeMap;
 use std::collections::HashMap;
 use tonic::metadata::MetadataMap;
 
@@ -136,6 +140,53 @@ impl QueryRuntimeContext {
         metadata
     }
 
+    pub fn prompt_hook_resolve_request(
+        &self,
+        db_identifier: Option<&str>,
+    ) -> PromptHookResolveRequest {
+        let mut additional_variables = BTreeMap::new();
+
+        insert_btree_optional(
+            &mut additional_variables,
+            "agent_id",
+            self.agent_id.as_ref(),
+        );
+        insert_btree_optional(
+            &mut additional_variables,
+            "agent_version",
+            self.agent_version.as_ref(),
+        );
+        insert_btree_optional(
+            &mut additional_variables,
+            "schema_mode",
+            self.schema_mode.as_ref(),
+        );
+        insert_btree_optional(
+            &mut additional_variables,
+            "tool_intent",
+            self.tool_intent.as_ref().map(tool_intent_name),
+        );
+
+        PromptHookResolveRequest {
+            explicit_hook_id: self.prompt_hook_id.clone(),
+            explicit_selector_key: self.prompt_selector_key.clone(),
+            request_context: PromptHookRequestContext {
+                user_id: self.user_id.clone(),
+                organization_id: self.organization_id.clone(),
+                tool_name: self.tool_name.clone(),
+                session_id: self.session_id.clone(),
+                headers: BTreeMap::new(),
+                grants: self.grants.clone(),
+            },
+            schema_context: PromptHookSchemaContext {
+                database_id: db_identifier.map(ToOwned::to_owned),
+                table_names: self.table_names.clone(),
+                domain_tags: self.domain_tags.clone(),
+            },
+            additional_variables,
+        }
+    }
+
     pub fn with_registered_agent(
         mut self,
         agent_id: &str,
@@ -204,6 +255,16 @@ fn default_tool_name(intent: ToolIntent) -> &'static str {
 
 fn insert_optional<S: Into<String>>(
     metadata: &mut HashMap<String, String>,
+    key: &str,
+    value: Option<S>,
+) {
+    if let Some(value) = value {
+        metadata.insert(key.to_string(), value.into());
+    }
+}
+
+fn insert_btree_optional<S: Into<String>>(
+    metadata: &mut BTreeMap<String, String>,
     key: &str,
     value: Option<S>,
 ) {
