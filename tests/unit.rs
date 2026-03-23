@@ -33,3 +33,6 @@ mod policy_engine_tests;
 
 #[path = "unit/runtime_context_tests.rs"]
 mod runtime_context_tests;
+
+#[path = "unit/prompt_hook_tests.rs"]
+mod prompt_hook_tests;

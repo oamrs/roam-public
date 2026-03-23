@@ -7,6 +7,7 @@ pub mod interceptor;
 pub mod mapper;
 pub mod mirror;
 pub mod policy_engine;
+pub mod prompt_hooks;
 pub mod runtime_context;
 pub mod tcp;
 
@@ -27,6 +28,13 @@ pub use mirror::{
 pub use policy_engine::{
     AuthorizationContext, AuthorizedSubqueryShape, PolicyContext, PolicyDecision, PolicyEngine,
     SubqueryPolicy, ToolContract, ToolIntent,
+};
+pub use prompt_hooks::{
+    build_template_variables, parse_matching_rules_yaml, preview_prompt_hook, render_template,
+    resolve_prompt_hook, PromptHookDefinition, PromptHookMatchPreview, PromptHookMatchRules,
+    PromptHookPreviewRequest, PromptHookRequestContext, PromptHookRequestMatchRules,
+    PromptHookResolution, PromptHookResolveRequest, PromptHookSchemaContext,
+    PromptHookSchemaMatchRules, PromptHookUpsertRequest,
 };
 pub use runtime_context::QueryRuntimeContext;
 pub use tcp::{
