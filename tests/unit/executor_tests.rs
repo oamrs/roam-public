@@ -853,7 +853,7 @@ async fn query_service_runtime_context_is_emitted_in_query_events() {
 
 #[serial_test::serial(event_bus)]
 #[tokio::test]
-async fn query_service_resolved_prompt_hook_is_emitted_in_query_events() {
+async fn query_service_prompt_hook_metadata_excludes_rendered_prompt() {
     use oam::interceptor::get_event_bus;
     use oam::Event;
 
@@ -916,10 +916,7 @@ async fn query_service_resolved_prompt_hook_is_emitted_in_query_events() {
         metadata.get("resolved_prompt_hook_selection_reason"),
         Some(&"priority_match".to_string())
     );
-    assert_eq!(
-        metadata.get("resolved_prompt"),
-        Some(&"System prompt for finance on ledger_entries".to_string())
-    );
+    assert!(!metadata.contains_key("resolved_prompt"));
 }
 
 #[tokio::test]

@@ -427,10 +427,7 @@ async fn grpc_prompt_hook_resolution_is_emitted_into_query_events() {
         metadata.get("resolved_prompt_hook_id"),
         Some(&"finance-default".to_string())
     );
-    assert_eq!(
-        metadata.get("resolved_prompt"),
-        Some(&"Runtime prompt for finance".to_string())
-    );
+    assert!(!metadata.contains_key("resolved_prompt"));
 
     drop(handle);
 }

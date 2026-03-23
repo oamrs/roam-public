@@ -160,10 +160,6 @@ impl QueryRuntimeContext {
                 "resolved_prompt_hook_selection_reason".to_string(),
                 resolution.selection_reason.clone(),
             );
-            metadata.insert(
-                "resolved_prompt".to_string(),
-                resolution.rendered_prompt.clone(),
-            );
             if !resolution.matched_hook_ids.is_empty() {
                 metadata.insert(
                     "resolved_prompt_hook_matched_ids".to_string(),
