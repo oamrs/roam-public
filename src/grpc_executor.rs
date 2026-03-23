@@ -3,9 +3,15 @@ use crate::executor::{
     GetTableRequest as ExecGetTableRequest, QueryServiceImpl, SchemaService, SchemaServiceImpl,
     ValidateQueryRequest,
 };
+use crate::interceptor::{get_event_bus, Event as DomainEvent};
 use crate::runtime_context::QueryRuntimeContext;
+use roam_proto::v1::agent::SchemaMode;
+use std::collections::HashMap;
+use std::pin::Pin;
 use std::sync::Arc;
+use std::task::{Context, Poll};
 use tokio::sync::Mutex;
+use tokio_stream::Stream;
 use tonic::{transport::Server, Request, Response, Status};
 
 /// Generated proto types (imported from roam-proto)
@@ -29,11 +35,82 @@ use tokio_stream::wrappers::ReceiverStream;
 pub struct GrpcExecutor {
     query_service: Arc<Mutex<QueryServiceImpl>>,
     schema_service: Arc<Mutex<SchemaServiceImpl>>,
+    sessions: Arc<SessionRegistry>,
 }
 
 /// Basic implementation of AgentService for registration and event streaming
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct RegisteredAgentSession {
+    pub session_id: String,
+    pub agent_id: String,
+    pub version: String,
+    pub schema_mode: SchemaMode,
+}
+
+impl RegisteredAgentSession {
+    fn schema_mode_name(&self) -> &'static str {
+        self.schema_mode.as_str_name()
+    }
+}
+
 #[derive(Default)]
-pub struct GrpcAgentServiceImpl {}
+struct SessionRegistry {
+    sessions: Mutex<HashMap<String, RegisteredAgentSession>>,
+}
+
+impl SessionRegistry {
+    async fn insert(&self, session: RegisteredAgentSession) {
+        self.sessions
+            .lock()
+            .await
+            .insert(session.session_id.clone(), session);
+    }
+
+    async fn get(&self, session_id: &str) -> Option<RegisteredAgentSession> {
+        self.sessions.lock().await.get(session_id).cloned()
+    }
+}
+
+pub struct GrpcAgentServiceImpl {
+    sessions: Arc<SessionRegistry>,
+}
+
+impl Default for GrpcAgentServiceImpl {
+    fn default() -> Self {
+        Self::new(Arc::new(SessionRegistry::default()))
+    }
+}
+
+impl GrpcAgentServiceImpl {
+    fn new(sessions: Arc<SessionRegistry>) -> Self {
+        Self { sessions }
+    }
+
+    pub async fn registered_session(&self, session_id: &str) -> Option<RegisteredAgentSession> {
+        self.sessions.get(session_id).await
+    }
+}
+
+pub struct SessionEventStream {
+    inner: ReceiverStream<Result<Event, Status>>,
+    subscriber_id: Option<usize>,
+}
+
+impl Stream for SessionEventStream {
+    type Item = Result<Event, Status>;
+
+    fn poll_next(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
+        Pin::new(&mut self.inner).poll_next(cx)
+    }
+}
+
+impl Drop for SessionEventStream {
+    fn drop(&mut self) {
+        if let Some(subscriber_id) = self.subscriber_id.take() {
+            let _ = get_event_bus().unregister_subscriber(subscriber_id);
+        }
+    }
+}
 
 #[tonic::async_trait]
 impl ProtoAgentService for GrpcAgentServiceImpl {
@@ -41,25 +118,53 @@ impl ProtoAgentService for GrpcAgentServiceImpl {
         &self,
         request: Request<ConnectRequest>,
     ) -> Result<Response<ConnectResponse>, Status> {
-        let _req = request.into_inner();
-        // println!("Agent registered: {} (v{})", req.agent_id, req.version);
+        let req = request.into_inner();
+        let schema_mode = SchemaMode::try_from(req.mode)
+            .map_err(|_| Status::invalid_argument("unsupported schema mode"))?;
+        let session = RegisteredAgentSession {
+            session_id: uuid::Uuid::new_v4().to_string(),
+            agent_id: req.agent_id,
+            version: req.version,
+            schema_mode,
+        };
+
+        self.sessions.insert(session.clone()).await;
 
         Ok(Response::new(ConnectResponse {
             success: true,
-            session_id: uuid::Uuid::new_v4().to_string(),
+            session_id: session.session_id,
         }))
     }
 
-    type StreamEventsStream = ReceiverStream<Result<Event, Status>>;
+    type StreamEventsStream = SessionEventStream;
 
     async fn stream_events(
         &self,
-        _request: Request<EventStreamRequest>,
+        request: Request<EventStreamRequest>,
     ) -> Result<Response<Self::StreamEventsStream>, Status> {
-        let (_tx, rx) = tokio::sync::mpsc::channel(4);
-        // Create an empty stream for now
-        // In real impl, we would register this channel to an event bus
-        Ok(Response::new(ReceiverStream::new(rx)))
+        let session_id = request.into_inner().session_id;
+        let (tx, rx) = tokio::sync::mpsc::channel(16);
+        let requested_session_id = session_id.clone();
+        let subscriber_id = get_event_bus()
+            .register_subscriber(Box::new(move |event: &DomainEvent| {
+                let metadata = event.metadata();
+                if metadata.get("session_id") != Some(&requested_session_id) {
+                    return;
+                }
+
+                if let Ok(payload) = serde_json::to_vec(event) {
+                    let _ = tx.try_send(Ok(Event {
+                        r#type: event.event_type().to_string(),
+                        payload,
+                    }));
+                }
+            }))
+            .map_err(Status::internal)?;
+
+        Ok(Response::new(SessionEventStream {
+            inner: ReceiverStream::new(rx),
+            subscriber_id: Some(subscriber_id),
+        }))
     }
 }
 
@@ -74,6 +179,7 @@ impl GrpcExecutor {
         Ok(Self {
             query_service: Arc::new(Mutex::new(query_service)),
             schema_service: Arc::new(Mutex::new(schema_service)),
+            sessions: Arc::new(SessionRegistry::default()),
         })
     }
 
@@ -85,13 +191,13 @@ impl GrpcExecutor {
 
         let query_svc = GrpcQueryServiceImpl {
             inner: self.query_service.clone(),
+            sessions: self.sessions.clone(),
         };
         let schema_svc = GrpcSchemaServiceImpl {
             inner: self.schema_service.clone(),
         };
 
-        // Add AgentService to server - THIS IS NEW
-        let agent_svc = GrpcAgentServiceImpl::default();
+        let agent_svc = GrpcAgentServiceImpl::new(self.sessions.clone());
 
         let handle = tokio::spawn(async move {
             let _ = Server::builder()
@@ -108,6 +214,7 @@ impl GrpcExecutor {
 
 struct GrpcQueryServiceImpl {
     inner: Arc<Mutex<QueryServiceImpl>>,
+    sessions: Arc<SessionRegistry>,
 }
 
 #[tonic::async_trait]
@@ -116,7 +223,16 @@ impl ProtoQueryService for GrpcQueryServiceImpl {
         &self,
         request: Request<ProtoExecuteQueryRequest>,
     ) -> Result<Response<ProtoExecuteQueryResponse>, Status> {
-        let runtime_context = QueryRuntimeContext::from_metadata(request.metadata());
+        let mut runtime_context = QueryRuntimeContext::from_metadata(request.metadata());
+        if let Some(session_id) = runtime_context.session_id.clone() {
+            if let Some(session) = self.sessions.get(&session_id).await {
+                runtime_context = runtime_context.with_registered_agent(
+                    &session.agent_id,
+                    &session.version,
+                    session.schema_mode_name(),
+                );
+            }
+        }
         let req = request.into_inner();
 
         let exec_req = ExecuteQueryRequest {
@@ -155,7 +271,16 @@ impl ProtoQueryService for GrpcQueryServiceImpl {
         &self,
         request: Request<ProtoValidateQueryRequest>,
     ) -> Result<Response<ValidationResponse>, Status> {
-        let runtime_context = QueryRuntimeContext::from_metadata(request.metadata());
+        let mut runtime_context = QueryRuntimeContext::from_metadata(request.metadata());
+        if let Some(session_id) = runtime_context.session_id.clone() {
+            if let Some(session) = self.sessions.get(&session_id).await {
+                runtime_context = runtime_context.with_registered_agent(
+                    &session.agent_id,
+                    &session.version,
+                    session.schema_mode_name(),
+                );
+            }
+        }
         let req = request.into_inner();
 
         let exec_req = ValidateQueryRequest {

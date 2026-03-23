@@ -63,7 +63,8 @@ fn runtime_context_builds_policy_and_event_metadata() {
         prompt_selector_key: Some("finance-default".to_string()),
         session_id: Some("session-123".to_string()),
         ..Default::default()
-    };
+    }
+    .with_registered_agent("agent-9", "2.4.1", "HYBRID");
 
     let policy_context = context.policy_context().expect("policy context");
     assert_eq!(policy_context.tool.name, "finance.query");
@@ -72,6 +73,9 @@ fn runtime_context_builds_policy_and_event_metadata() {
 
     let metadata = context.event_metadata();
     assert_eq!(metadata.get("session_id"), Some(&"session-123".to_string()));
+    assert_eq!(metadata.get("agent_id"), Some(&"agent-9".to_string()));
+    assert_eq!(metadata.get("agent_version"), Some(&"2.4.1".to_string()));
+    assert_eq!(metadata.get("schema_mode"), Some(&"HYBRID".to_string()));
     assert_eq!(
         metadata.get("prompt_selector_key"),
         Some(&"finance-default".to_string())

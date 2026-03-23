@@ -1,5 +1,7 @@
 use oam::grpc_executor::GrpcExecutor;
 use oam::interceptor::get_event_bus;
+use roam_proto::v1::agent::agent_service_client::AgentServiceClient;
+use roam_proto::v1::agent::{ConnectRequest, SchemaMode};
 use roam_proto::v1::query::query_service_client::QueryServiceClient;
 use roam_proto::v1::query::ExecuteQueryRequest;
 use roam_proto::v1::schema::schema_service_client::SchemaServiceClient;
@@ -292,6 +294,86 @@ async fn grpc_query_metadata_is_forwarded_into_query_events() {
         metadata.get("prompt_selector_key"),
         Some(&"finance-default".to_string())
     );
+
+    drop(handle);
+}
+
+#[tokio::test]
+async fn registered_session_metadata_is_enriched_into_query_events() {
+    let event_bus = get_event_bus();
+    let _ = event_bus.clear();
+
+    let db_path = test_db_path();
+    let executor = GrpcExecutor::new(&db_path).expect("Failed to create GrpcExecutor");
+
+    let port = get_available_port().expect("Failed to get available port");
+    let addr_str = format!("127.0.0.1:{}", port);
+
+    let handle = executor
+        .start_server(&addr_str)
+        .await
+        .expect("Failed to start server");
+
+    tokio::time::sleep(Duration::from_millis(200)).await;
+
+    let addr = format!("http://127.0.0.1:{}", port);
+    let mut agent_client = AgentServiceClient::connect(addr.clone())
+        .await
+        .expect("connect agent client");
+    let register_response = agent_client
+        .register(tonic::Request::new(ConnectRequest {
+            agent_id: "finance-agent".to_string(),
+            version: "1.2.3".to_string(),
+            mode: SchemaMode::Hybrid.into(),
+        }))
+        .await
+        .expect("register agent")
+        .into_inner();
+
+    let mut query_client = QueryServiceClient::connect(addr)
+        .await
+        .expect("connect query client");
+    let db_identifier = "grpc-session-registry-db".to_string();
+    let mut request = tonic::Request::new(ExecuteQueryRequest {
+        db_identifier: db_identifier.clone(),
+        query: "SELECT * FROM users; DROP TABLE users;".to_string(),
+        limit: 10,
+        timeout_seconds: 5,
+    });
+    request.metadata_mut().insert(
+        "x-roam-session-id",
+        register_response.session_id.parse().unwrap(),
+    );
+
+    let _response = query_client
+        .execute_query(request)
+        .await
+        .expect("execute query rpc");
+
+    let events = event_bus.all_events().expect("get events");
+    let event = events
+        .iter()
+        .find(|event| match event {
+            oam::Event::QueryValidationFailed {
+                db_identifier: event_db_identifier,
+                context,
+                ..
+            } => {
+                event_db_identifier == &db_identifier
+                    && context.get("session_id") == Some(&register_response.session_id)
+            }
+            _ => false,
+        })
+        .expect("grpc validation failed event");
+
+    let metadata = event.metadata();
+    assert_eq!(
+        metadata.get("session_id"),
+        Some(&register_response.session_id)
+    );
+    assert_eq!(metadata.get("agent_id"), Some(&"finance-agent".to_string()));
+    assert_eq!(metadata.get("agent_version"), Some(&"1.2.3".to_string()));
+    assert_eq!(metadata.get("schema_mode"), Some(&"HYBRID".to_string()));
 
     drop(handle);
 }

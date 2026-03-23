@@ -19,6 +19,9 @@ const TABLE_NAMES_HEADER: &str = "x-roam-table-names";
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct QueryRuntimeContext {
     pub session_id: Option<String>,
+    pub agent_id: Option<String>,
+    pub agent_version: Option<String>,
+    pub schema_mode: Option<String>,
     pub user_id: Option<String>,
     pub organization_id: Option<String>,
     pub tool_name: Option<String>,
@@ -34,6 +37,9 @@ impl QueryRuntimeContext {
     pub fn from_metadata(metadata: &MetadataMap) -> Self {
         Self {
             session_id: get_ascii_metadata(metadata, SESSION_ID_HEADER),
+            agent_id: None,
+            agent_version: None,
+            schema_mode: None,
             user_id: get_ascii_metadata(metadata, USER_ID_HEADER),
             organization_id: get_ascii_metadata(metadata, ORGANIZATION_ID_HEADER),
             tool_name: get_ascii_metadata(metadata, TOOL_NAME_HEADER),
@@ -49,6 +55,9 @@ impl QueryRuntimeContext {
 
     pub fn has_values(&self) -> bool {
         self.session_id.is_some()
+            || self.agent_id.is_some()
+            || self.agent_version.is_some()
+            || self.schema_mode.is_some()
             || self.user_id.is_some()
             || self.organization_id.is_some()
             || self.tool_name.is_some()
@@ -88,6 +97,9 @@ impl QueryRuntimeContext {
         let mut metadata = HashMap::new();
 
         insert_optional(&mut metadata, "session_id", self.session_id.as_ref());
+        insert_optional(&mut metadata, "agent_id", self.agent_id.as_ref());
+        insert_optional(&mut metadata, "agent_version", self.agent_version.as_ref());
+        insert_optional(&mut metadata, "schema_mode", self.schema_mode.as_ref());
         insert_optional(&mut metadata, "user_id", self.user_id.as_ref());
         insert_optional(
             &mut metadata,
@@ -122,6 +134,18 @@ impl QueryRuntimeContext {
         }
 
         metadata
+    }
+
+    pub fn with_registered_agent(
+        mut self,
+        agent_id: &str,
+        agent_version: &str,
+        schema_mode: &str,
+    ) -> Self {
+        self.agent_id = Some(agent_id.to_string());
+        self.agent_version = Some(agent_version.to_string());
+        self.schema_mode = Some(schema_mode.to_string());
+        self
     }
 }
 
