@@ -4,6 +4,7 @@ use crate::executor::{
     ValidateQueryRequest,
 };
 use crate::interceptor::{get_event_bus, Event as DomainEvent};
+use crate::prompt_hooks::PromptHookResolver;
 use crate::runtime_context::QueryRuntimeContext;
 use roam_proto::v1::agent::SchemaMode;
 use std::collections::HashMap;
@@ -36,6 +37,7 @@ pub struct GrpcExecutor {
     query_service: Arc<Mutex<QueryServiceImpl>>,
     schema_service: Arc<Mutex<SchemaServiceImpl>>,
     sessions: Arc<SessionRegistry>,
+    prompt_hook_resolver: Option<Arc<dyn PromptHookResolver>>,
 }
 
 /// Basic implementation of AgentService for registration and event streaming
@@ -180,7 +182,13 @@ impl GrpcExecutor {
             query_service: Arc::new(Mutex::new(query_service)),
             schema_service: Arc::new(Mutex::new(schema_service)),
             sessions: Arc::new(SessionRegistry::default()),
+            prompt_hook_resolver: None,
         })
+    }
+
+    pub fn with_prompt_hook_resolver(mut self, resolver: Arc<dyn PromptHookResolver>) -> Self {
+        self.prompt_hook_resolver = Some(resolver);
+        self
     }
 
     pub async fn start_server(
@@ -188,6 +196,11 @@ impl GrpcExecutor {
         addr: &str,
     ) -> Result<tokio::task::JoinHandle<()>, Box<dyn std::error::Error>> {
         let addr_parsed = addr.parse()?;
+
+        if let Some(resolver) = self.prompt_hook_resolver.clone() {
+            let mut query_service = self.query_service.lock().await;
+            query_service.set_prompt_hook_resolver(resolver);
+        }
 
         let query_svc = GrpcQueryServiceImpl {
             inner: self.query_service.clone(),

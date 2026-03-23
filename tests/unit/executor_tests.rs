@@ -6,7 +6,68 @@ use oam::policy_engine::{
     AuthorizationContext, AuthorizedSubqueryShape, PolicyContext, SubqueryPolicy, ToolContract,
     ToolIntent,
 };
+use oam::prompt_hooks::{PromptHookDefinition, StaticPromptHookResolver};
 use oam::QueryRuntimeContext;
+use std::sync::Arc;
+
+#[derive(Clone)]
+struct TestPromptHook {
+    id: String,
+    name: String,
+    enabled: bool,
+    priority: i32,
+    selector_key: Option<String>,
+    markdown_template: String,
+    matching_rules_yaml: Option<String>,
+}
+
+impl PromptHookDefinition for TestPromptHook {
+    fn id(&self) -> &str {
+        &self.id
+    }
+
+    fn name(&self) -> &str {
+        &self.name
+    }
+
+    fn enabled(&self) -> bool {
+        self.enabled
+    }
+
+    fn priority(&self) -> i32 {
+        self.priority
+    }
+
+    fn selector_key(&self) -> Option<&str> {
+        self.selector_key.as_deref()
+    }
+
+    fn markdown_template(&self) -> &str {
+        &self.markdown_template
+    }
+
+    fn matching_rules_yaml(&self) -> Option<&str> {
+        self.matching_rules_yaml.as_deref()
+    }
+}
+
+fn test_prompt_hook(
+    id: &str,
+    name: &str,
+    priority: i32,
+    matching_rules_yaml: Option<&str>,
+    markdown_template: &str,
+) -> TestPromptHook {
+    TestPromptHook {
+        id: id.to_string(),
+        name: name.to_string(),
+        enabled: true,
+        priority,
+        selector_key: None,
+        markdown_template: markdown_template.to_string(),
+        matching_rules_yaml: matching_rules_yaml.map(ToString::to_string),
+    }
+}
 
 #[tokio::test]
 async fn schema_service_can_be_created() {
@@ -788,4 +849,116 @@ async fn query_service_runtime_context_is_emitted_in_query_events() {
         metadata.get("prompt_selector_key"),
         Some(&"finance-default".to_string())
     );
+}
+
+#[serial_test::serial(event_bus)]
+#[tokio::test]
+async fn query_service_resolved_prompt_hook_is_emitted_in_query_events() {
+    use oam::interceptor::get_event_bus;
+    use oam::Event;
+
+    let event_bus = get_event_bus();
+    let _ = event_bus.clear();
+
+    let mut service = QueryServiceImpl::new();
+    service.set_prompt_hook_resolver(Arc::new(StaticPromptHookResolver::new(vec![
+        test_prompt_hook(
+            "finance-default",
+            "Finance Default",
+            50,
+            Some(
+                "request:\n  organization_ids: [finance]\nschema:\n  table_names: [ledger_entries]",
+            ),
+            "System prompt for {{organization_id}} on {{schema_table_names_csv}}",
+        ),
+    ])));
+
+    let test_db_id = "prompt_hook_runtime_event".to_string();
+    let request = ExecuteQueryRequest {
+        db_identifier: test_db_id.clone(),
+        query: "SELECT * FROM users; DROP TABLE users;".to_string(),
+        parameters: std::collections::HashMap::new(),
+        limit: 100,
+        timeout_seconds: 30,
+    };
+
+    let runtime_context = QueryRuntimeContext {
+        organization_id: Some("finance".to_string()),
+        tool_name: Some("finance.query".to_string()),
+        table_names: vec!["ledger_entries".to_string()],
+        ..Default::default()
+    };
+
+    let response = service
+        .execute_query_with_runtime_context(request, runtime_context)
+        .await
+        .expect("response");
+    assert_eq!(response.status, QueryStatus::ValidationError as i32);
+
+    let events = event_bus.all_events().expect("get generic events");
+    let event = events
+        .iter()
+        .find(|event| {
+            matches!(event, Event::QueryValidationFailed { db_identifier, .. } if db_identifier == &test_db_id)
+        })
+        .expect("validation failed event");
+
+    let metadata = event.metadata();
+    assert_eq!(
+        metadata.get("resolved_prompt_hook_id"),
+        Some(&"finance-default".to_string())
+    );
+    assert_eq!(
+        metadata.get("resolved_prompt_hook_name"),
+        Some(&"Finance Default".to_string())
+    );
+    assert_eq!(
+        metadata.get("resolved_prompt_hook_selection_reason"),
+        Some(&"priority_match".to_string())
+    );
+    assert_eq!(
+        metadata.get("resolved_prompt"),
+        Some(&"System prompt for finance on ledger_entries".to_string())
+    );
+}
+
+#[tokio::test]
+async fn validate_query_with_runtime_context_fails_closed_on_ambiguous_prompt_hook_resolution() {
+    let mut service = QueryServiceImpl::new();
+    service.set_prompt_hook_resolver(Arc::new(StaticPromptHookResolver::new(vec![
+        test_prompt_hook(
+            "hook-a",
+            "Hook A",
+            50,
+            Some("request:\n  organization_ids: [finance]"),
+            "A {{organization_id}}",
+        ),
+        test_prompt_hook(
+            "hook-b",
+            "Hook B",
+            50,
+            Some("request:\n  organization_ids: [finance]"),
+            "B {{organization_id}}",
+        ),
+    ])));
+
+    let request = ValidateQueryRequest {
+        db_identifier: "primary".to_string(),
+        query: "SELECT * FROM users".to_string(),
+        parameters: std::collections::HashMap::new(),
+    };
+
+    let runtime_context = QueryRuntimeContext {
+        organization_id: Some("finance".to_string()),
+        ..Default::default()
+    };
+
+    let response = service
+        .validate_query_with_runtime_context(request, runtime_context)
+        .await
+        .expect("response");
+
+    assert!(!response.valid);
+    assert!(response.error_message.contains("Prompt hook resolution failed"));
+    assert!(response.error_message.contains("ambiguous"));
 }

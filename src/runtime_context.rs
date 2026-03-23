@@ -2,7 +2,8 @@ use crate::policy_engine::{
     AuthorizationContext, PolicyContext, SubqueryPolicy, ToolContract, ToolIntent,
 };
 use crate::prompt_hooks::{
-    PromptHookRequestContext, PromptHookResolveRequest, PromptHookSchemaContext,
+    PromptHookRequestContext, PromptHookResolution, PromptHookResolveRequest,
+    PromptHookSchemaContext,
 };
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
@@ -135,6 +136,40 @@ impl QueryRuntimeContext {
         }
         if !self.table_names.is_empty() {
             metadata.insert("table_names".to_string(), self.table_names.join(","));
+        }
+
+        metadata
+    }
+
+    pub fn event_metadata_with_prompt_hook_resolution(
+        &self,
+        resolution: Option<&PromptHookResolution>,
+    ) -> HashMap<String, String> {
+        let mut metadata = self.event_metadata();
+
+        if let Some(resolution) = resolution {
+            metadata.insert(
+                "resolved_prompt_hook_id".to_string(),
+                resolution.selected_hook_id.clone(),
+            );
+            metadata.insert(
+                "resolved_prompt_hook_name".to_string(),
+                resolution.selected_hook_name.clone(),
+            );
+            metadata.insert(
+                "resolved_prompt_hook_selection_reason".to_string(),
+                resolution.selection_reason.clone(),
+            );
+            metadata.insert(
+                "resolved_prompt".to_string(),
+                resolution.rendered_prompt.clone(),
+            );
+            if !resolution.matched_hook_ids.is_empty() {
+                metadata.insert(
+                    "resolved_prompt_hook_matched_ids".to_string(),
+                    resolution.matched_hook_ids.join(","),
+                );
+            }
         }
 
         metadata

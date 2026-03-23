@@ -1,9 +1,11 @@
 use crate::policy_engine::{PolicyContext, PolicyEngine, ToolIntent};
+use crate::prompt_hooks::{PromptHookResolution, PromptHookResolver};
 use crate::runtime_context::QueryRuntimeContext;
 use once_cell::sync::Lazy;
 use rusqlite::Connection;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
+use std::sync::Arc;
 use std::sync::Mutex;
 
 static DB_CONNECTION_CACHE: Lazy<Mutex<HashMap<String, Connection>>> =
@@ -198,16 +200,24 @@ impl SchemaService for SchemaServiceImpl {
 
 pub struct QueryServiceImpl {
     db_path: Option<String>,
+    prompt_hook_resolver: Option<Arc<dyn PromptHookResolver>>,
 }
 
 impl QueryServiceImpl {
     pub fn new() -> Self {
-        Self { db_path: None }
+        Self {
+            db_path: None,
+            prompt_hook_resolver: None,
+        }
     }
 
     pub fn set_db_path(&mut self, db_path: &str) -> Result<(), String> {
         self.db_path = Some(db_path.to_string());
         Ok(())
+    }
+
+    pub fn set_prompt_hook_resolver(&mut self, resolver: Arc<dyn PromptHookResolver>) {
+        self.prompt_hook_resolver = Some(resolver);
     }
 
     fn evaluate_policy(query: &str, policy_context: Option<&PolicyContext>) -> Option<String> {
@@ -269,8 +279,16 @@ impl QueryServiceImpl {
         &self,
         request: ValidateQueryRequest,
         policy_context: Option<&PolicyContext>,
-        _runtime_context: Option<&QueryRuntimeContext>,
+        runtime_context: Option<&QueryRuntimeContext>,
     ) -> Result<ValidationResponse, String> {
+        if let Err(error) = self.resolve_runtime_prompt_hook(&request.db_identifier, runtime_context)
+        {
+            return Ok(ValidationResponse {
+                valid: false,
+                error_message: format!("Prompt hook resolution failed: {error}"),
+            });
+        }
+
         let db_path = match &self.db_path {
             Some(path) => path,
             None => {
@@ -411,6 +429,23 @@ impl QueryServiceImpl {
     ) -> Result<ExecuteQueryResponse, String> {
         let start_time = std::time::Instant::now();
 
+        let prompt_hook_resolution = match self
+            .resolve_runtime_prompt_hook(&request.db_identifier, runtime_context)
+        {
+            Ok(resolution) => resolution,
+            Err(error) => {
+                return self
+                    .build_validation_error_response(
+                        &request,
+                        format!("Prompt hook resolution failed: {error}"),
+                        start_time,
+                        runtime_context,
+                        None,
+                    )
+                    .await;
+            }
+        };
+
         if let Some(error_message) = Self::validate_query_policy(&request.query, policy_context) {
             return self
                 .build_validation_error_response(
@@ -418,6 +453,7 @@ impl QueryServiceImpl {
                     error_message,
                     start_time,
                     runtime_context,
+                    prompt_hook_resolution.as_ref(),
                 )
                 .await;
         }
@@ -432,6 +468,7 @@ impl QueryServiceImpl {
                         error_msg,
                         start_time,
                         runtime_context,
+                        prompt_hook_resolution.as_ref(),
                     )
                     .await;
             }
@@ -452,6 +489,7 @@ impl QueryServiceImpl {
                     validation_result.error_message,
                     start_time,
                     runtime_context,
+                    prompt_hook_resolution.as_ref(),
                 )
                 .await;
         }
@@ -464,8 +502,29 @@ impl QueryServiceImpl {
         )
         .await;
 
-        self.build_execution_response(&request, execution_result, start_time, runtime_context)
+        self.build_execution_response(
+            &request,
+            execution_result,
+            start_time,
+            runtime_context,
+            prompt_hook_resolution.as_ref(),
+        )
             .await
+    }
+
+    fn resolve_runtime_prompt_hook(
+        &self,
+        db_identifier: &str,
+        runtime_context: Option<&QueryRuntimeContext>,
+    ) -> Result<Option<PromptHookResolution>, String> {
+        let Some(runtime_context) = runtime_context else {
+            return Ok(None);
+        };
+        let Some(resolver) = &self.prompt_hook_resolver else {
+            return Ok(None);
+        };
+
+        resolver.resolve(&runtime_context.prompt_hook_resolve_request(Some(db_identifier)))
     }
 
     async fn build_validation_error_response(
@@ -474,6 +533,7 @@ impl QueryServiceImpl {
         error_message: String,
         start_time: std::time::Instant,
         runtime_context: Option<&QueryRuntimeContext>,
+        prompt_hook_resolution: Option<&PromptHookResolution>,
     ) -> Result<ExecuteQueryResponse, String> {
         use crate::interceptor::{get_event_bus, Event};
         use chrono::Utc;
@@ -487,7 +547,9 @@ impl QueryServiceImpl {
             error_message.clone(),
             timestamp.clone(),
             runtime_context
-                .map(QueryRuntimeContext::event_metadata)
+                .map(|context| {
+                    context.event_metadata_with_prompt_hook_resolution(prompt_hook_resolution)
+                })
                 .unwrap_or_default(),
         );
         if let Err(e) = get_event_bus().dispatch_generic(&event) {
@@ -509,6 +571,7 @@ impl QueryServiceImpl {
         error_message: String,
         start_time: std::time::Instant,
         runtime_context: Option<&QueryRuntimeContext>,
+        prompt_hook_resolution: Option<&PromptHookResolution>,
     ) -> Result<ExecuteQueryResponse, String> {
         use crate::interceptor::{get_event_bus, Event};
         use chrono::Utc;
@@ -522,7 +585,9 @@ impl QueryServiceImpl {
             error_message.clone(),
             timestamp.clone(),
             runtime_context
-                .map(QueryRuntimeContext::event_metadata)
+                .map(|context| {
+                    context.event_metadata_with_prompt_hook_resolution(prompt_hook_resolution)
+                })
                 .unwrap_or_default(),
         );
         if let Err(e) = get_event_bus().dispatch_generic(&event) {
@@ -544,6 +609,7 @@ impl QueryServiceImpl {
         execution_result: Result<i64, String>,
         start_time: std::time::Instant,
         runtime_context: Option<&QueryRuntimeContext>,
+        prompt_hook_resolution: Option<&PromptHookResolution>,
     ) -> Result<ExecuteQueryResponse, String> {
         use crate::interceptor::{get_event_bus, Event};
         use chrono::Utc;
@@ -561,7 +627,10 @@ impl QueryServiceImpl {
                     execution_ms,
                     timestamp.clone(),
                     runtime_context
-                        .map(QueryRuntimeContext::event_metadata)
+                        .map(|context| {
+                            context
+                                .event_metadata_with_prompt_hook_resolution(prompt_hook_resolution)
+                        })
                         .unwrap_or_default(),
                 );
                 if let Err(e) = get_event_bus().dispatch_generic(&event) {
@@ -583,6 +652,7 @@ impl QueryServiceImpl {
                     execution_ms,
                     timestamp,
                     runtime_context,
+                    prompt_hook_resolution,
                 )
                 .await
             }
@@ -596,6 +666,7 @@ impl QueryServiceImpl {
         execution_ms: i32,
         timestamp: String,
         runtime_context: Option<&QueryRuntimeContext>,
+        prompt_hook_resolution: Option<&PromptHookResolution>,
     ) -> Result<ExecuteQueryResponse, String> {
         use crate::interceptor::{get_event_bus, Event};
 
@@ -615,7 +686,9 @@ impl QueryServiceImpl {
             error.clone(),
             timestamp.clone(),
             runtime_context
-                .map(QueryRuntimeContext::event_metadata)
+                .map(|context| {
+                    context.event_metadata_with_prompt_hook_resolution(prompt_hook_resolution)
+                })
                 .unwrap_or_default(),
         );
         if let Err(e) = get_event_bus().dispatch_generic(&event) {

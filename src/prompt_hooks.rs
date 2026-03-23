@@ -108,6 +108,9 @@ pub struct PromptHookResolution {
     pub variables: BTreeMap<String, String>,
 }
 
+const NO_MATCHING_PROMPT_HOOK_ERROR: &str =
+    "No enabled prompt hook matched the supplied request and schema context";
+
 pub trait PromptHookDefinition {
     fn id(&self) -> &str;
     fn name(&self) -> &str;
@@ -116,6 +119,45 @@ pub trait PromptHookDefinition {
     fn selector_key(&self) -> Option<&str>;
     fn markdown_template(&self) -> &str;
     fn matching_rules_yaml(&self) -> Option<&str>;
+}
+
+pub trait PromptHookResolver: Send + Sync {
+    fn resolve(
+        &self,
+        request: &PromptHookResolveRequest,
+    ) -> Result<Option<PromptHookResolution>, String>;
+}
+
+#[derive(Debug, Clone)]
+pub struct StaticPromptHookResolver<T> {
+    hooks: Vec<T>,
+}
+
+impl<T> StaticPromptHookResolver<T> {
+    pub fn new(hooks: Vec<T>) -> Self {
+        Self { hooks }
+    }
+}
+
+impl<T> PromptHookResolver for StaticPromptHookResolver<T>
+where
+    T: PromptHookDefinition + Send + Sync,
+{
+    fn resolve(
+        &self,
+        request: &PromptHookResolveRequest,
+    ) -> Result<Option<PromptHookResolution>, String> {
+        match resolve_prompt_hook(&self.hooks, request) {
+            Ok(resolution) => Ok(Some(resolution)),
+            Err(error)
+                if !has_explicit_prompt_hook_selection(request)
+                    && error == NO_MATCHING_PROMPT_HOOK_ERROR =>
+            {
+                Ok(None)
+            }
+            Err(error) => Err(error),
+        }
+    }
 }
 
 pub fn validate_upsert_request(request: &PromptHookUpsertRequest) -> Result<(), String> {
@@ -207,9 +249,7 @@ pub fn resolve_prompt_hook<T: PromptHookDefinition>(
     }
 
     if matched.is_empty() {
-        return Err(
-            "No enabled prompt hook matched the supplied request and schema context".to_string(),
-        );
+        return Err(NO_MATCHING_PROMPT_HOOK_ERROR.to_string());
     }
 
     matched.sort_by(|(left, _), (right, _)| {
@@ -258,6 +298,10 @@ fn build_resolution<T: PromptHookDefinition>(
         matched_hook_ids,
         variables,
     })
+}
+
+fn has_explicit_prompt_hook_selection(request: &PromptHookResolveRequest) -> bool {
+    request.explicit_hook_id.is_some() || request.explicit_selector_key.is_some()
 }
 
 fn matches_rules(rules: &PromptHookMatchRules, request: &PromptHookResolveRequest) -> bool {
