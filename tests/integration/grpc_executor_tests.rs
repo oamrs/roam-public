@@ -429,6 +429,23 @@ async fn grpc_prompt_hook_resolution_is_emitted_into_query_events() {
     );
     assert!(!metadata.contains_key("resolved_prompt"));
 
+    let audit_event = events
+        .iter()
+        .find(|event| {
+            matches!(event, oam::Event::PromptHookAuditRecorded { record, .. } if record.db_identifier == db_identifier)
+        })
+        .expect("grpc prompt hook audit event");
+
+    let audit_metadata = audit_event.metadata();
+    assert_eq!(
+        audit_metadata.get("prompt_hook_id"),
+        Some(&"finance-default".to_string())
+    );
+    assert_eq!(
+        audit_metadata.get("rendered_prompt"),
+        Some(&"Runtime prompt for finance".to_string())
+    );
+
     drop(handle);
 }
 

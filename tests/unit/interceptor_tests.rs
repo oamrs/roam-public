@@ -1,5 +1,6 @@
 use oam::interceptor::{
     get_event_bus, CriticalModelBehavior, CriticalStatusEvent, Event, EventBus, HasCriticalStatus,
+    PromptHookAuditRecord,
 };
 use once_cell::sync::Lazy;
 use std::sync::Mutex;
@@ -320,6 +321,40 @@ async fn event_types_have_specific_metadata() {
     assert_eq!(metadata.get("column_name").unwrap(), "status");
     assert_eq!(metadata.get("old_value").unwrap(), "PENDING");
     assert_eq!(metadata.get("new_value").unwrap(), "SHIPPED");
+}
+
+#[tokio::test]
+async fn prompt_hook_audit_event_includes_rendered_prompt_metadata() {
+    let _lock = _acquire_test_lock();
+
+    let audit_event = Event::prompt_hook_audit_recorded(
+        PromptHookAuditRecord {
+            db_identifier: "finance-db".to_string(),
+            query: "SELECT * FROM ledger_entries".to_string(),
+            prompt_hook_id: "finance-default".to_string(),
+            prompt_hook_name: "Finance Default".to_string(),
+            selection_reason: "priority_match".to_string(),
+            rendered_prompt: "System prompt for finance on ledger_entries".to_string(),
+            timestamp: "2024-01-09T11:30:00Z".to_string(),
+        },
+        [("session_id".to_string(), "session-123".to_string())]
+            .into_iter()
+            .collect(),
+    );
+
+    let metadata = audit_event.metadata();
+
+    assert_eq!(
+        metadata.get("event_type").unwrap(),
+        "PromptHookAuditRecorded"
+    );
+    assert_eq!(metadata.get("prompt_hook_id").unwrap(), "finance-default");
+    assert_eq!(metadata.get("prompt_hook_name").unwrap(), "Finance Default");
+    assert_eq!(metadata.get("selection_reason").unwrap(), "priority_match");
+    assert_eq!(
+        metadata.get("rendered_prompt").unwrap(),
+        "System prompt for finance on ledger_entries"
+    );
 }
 
 #[tokio::test]

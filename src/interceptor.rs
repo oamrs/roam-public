@@ -13,6 +13,17 @@ pub struct CriticalStatusEvent {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct PromptHookAuditRecord {
+    pub db_identifier: String,
+    pub query: String,
+    pub prompt_hook_id: String,
+    pub prompt_hook_name: String,
+    pub selection_reason: String,
+    pub rendered_prompt: String,
+    pub timestamp: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(tag = "event_type")]
 pub enum Event {
     #[serde(rename = "StatusChange")]
@@ -65,6 +76,12 @@ pub enum Event {
         query: String,
         error_message: String,
         timestamp: String,
+        #[serde(default, skip_serializing_if = "HashMap::is_empty")]
+        context: HashMap<String, String>,
+    },
+    #[serde(rename = "PromptHookAuditRecorded")]
+    PromptHookAuditRecorded {
+        record: PromptHookAuditRecord,
         #[serde(default, skip_serializing_if = "HashMap::is_empty")]
         context: HashMap<String, String>,
     },
@@ -178,6 +195,13 @@ impl Event {
         }
     }
 
+    pub fn prompt_hook_audit_recorded(
+        record: PromptHookAuditRecord,
+        context: HashMap<String, String>,
+    ) -> Self {
+        Event::PromptHookAuditRecorded { record, context }
+    }
+
     pub fn model_changed(entity_type: String, entity_id: String, action: String) -> Self {
         Event::ModelChanged {
             entity_type,
@@ -195,6 +219,7 @@ impl Event {
             Event::QueryExecuted { .. } => "QueryExecuted",
             Event::QueryValidationFailed { .. } => "QueryValidationFailed",
             Event::QueryExecutionError { .. } => "QueryExecutionError",
+            Event::PromptHookAuditRecorded { .. } => "PromptHookAuditRecorded",
             Event::ModelChanged { .. } => "ModelChanged",
         }
     }
@@ -284,6 +309,25 @@ impl Event {
                 map.insert("query".to_string(), query.clone());
                 map.insert("error_message".to_string(), error_message.clone());
                 map.insert("timestamp".to_string(), timestamp.clone());
+                map.extend(context.clone());
+            }
+            Event::PromptHookAuditRecorded { record, context } => {
+                map.insert("db_identifier".to_string(), record.db_identifier.clone());
+                map.insert("query".to_string(), record.query.clone());
+                map.insert("prompt_hook_id".to_string(), record.prompt_hook_id.clone());
+                map.insert(
+                    "prompt_hook_name".to_string(),
+                    record.prompt_hook_name.clone(),
+                );
+                map.insert(
+                    "selection_reason".to_string(),
+                    record.selection_reason.clone(),
+                );
+                map.insert(
+                    "rendered_prompt".to_string(),
+                    record.rendered_prompt.clone(),
+                );
+                map.insert("timestamp".to_string(), record.timestamp.clone());
                 map.extend(context.clone());
             }
             Event::ModelChanged {

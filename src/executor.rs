@@ -281,7 +281,8 @@ impl QueryServiceImpl {
         policy_context: Option<&PolicyContext>,
         runtime_context: Option<&QueryRuntimeContext>,
     ) -> Result<ValidationResponse, String> {
-        if let Err(error) = self.resolve_runtime_prompt_hook(&request.db_identifier, runtime_context)
+        if let Err(error) =
+            self.resolve_runtime_prompt_hook(&request.db_identifier, runtime_context)
         {
             return Ok(ValidationResponse {
                 valid: false,
@@ -429,22 +430,21 @@ impl QueryServiceImpl {
     ) -> Result<ExecuteQueryResponse, String> {
         let start_time = std::time::Instant::now();
 
-        let prompt_hook_resolution = match self
-            .resolve_runtime_prompt_hook(&request.db_identifier, runtime_context)
-        {
-            Ok(resolution) => resolution,
-            Err(error) => {
-                return self
-                    .build_validation_error_response(
-                        &request,
-                        format!("Prompt hook resolution failed: {error}"),
-                        start_time,
-                        runtime_context,
-                        None,
-                    )
-                    .await;
-            }
-        };
+        let prompt_hook_resolution =
+            match self.resolve_runtime_prompt_hook(&request.db_identifier, runtime_context) {
+                Ok(resolution) => resolution,
+                Err(error) => {
+                    return self
+                        .build_validation_error_response(
+                            &request,
+                            format!("Prompt hook resolution failed: {error}"),
+                            start_time,
+                            runtime_context,
+                            None,
+                        )
+                        .await;
+                }
+            };
 
         if let Some(error_message) = Self::validate_query_policy(&request.query, policy_context) {
             return self
@@ -509,7 +509,7 @@ impl QueryServiceImpl {
             runtime_context,
             prompt_hook_resolution.as_ref(),
         )
-            .await
+        .await
     }
 
     fn resolve_runtime_prompt_hook(
@@ -540,6 +540,13 @@ impl QueryServiceImpl {
 
         let execution_ms = start_time.elapsed().as_millis() as i32;
         let timestamp = Utc::now().to_rfc3339();
+
+        Self::dispatch_prompt_hook_audit_event(
+            request,
+            runtime_context,
+            prompt_hook_resolution,
+            &timestamp,
+        );
 
         let event = Event::query_validation_failed(
             request.db_identifier.clone(),
@@ -578,6 +585,13 @@ impl QueryServiceImpl {
 
         let execution_ms = start_time.elapsed().as_millis() as i32;
         let timestamp = Utc::now().to_rfc3339();
+
+        Self::dispatch_prompt_hook_audit_event(
+            request,
+            runtime_context,
+            prompt_hook_resolution,
+            &timestamp,
+        );
 
         let event = Event::query_execution_error(
             request.db_identifier.clone(),
@@ -619,6 +633,13 @@ impl QueryServiceImpl {
 
         match execution_result {
             Ok(row_count) => {
+                Self::dispatch_prompt_hook_audit_event(
+                    request,
+                    runtime_context,
+                    prompt_hook_resolution,
+                    &timestamp,
+                );
+
                 let event = Event::query_executed(
                     request.db_identifier.clone(),
                     request.query.clone(),
@@ -656,6 +677,41 @@ impl QueryServiceImpl {
                 )
                 .await
             }
+        }
+    }
+
+    fn dispatch_prompt_hook_audit_event(
+        request: &ExecuteQueryRequest,
+        runtime_context: Option<&QueryRuntimeContext>,
+        prompt_hook_resolution: Option<&PromptHookResolution>,
+        timestamp: &str,
+    ) {
+        use crate::interceptor::{get_event_bus, Event};
+
+        let Some(resolution) = prompt_hook_resolution else {
+            return;
+        };
+
+        let event = Event::prompt_hook_audit_recorded(
+            crate::interceptor::PromptHookAuditRecord {
+                db_identifier: request.db_identifier.clone(),
+                query: request.query.clone(),
+                prompt_hook_id: resolution.selected_hook_id.clone(),
+                prompt_hook_name: resolution.selected_hook_name.clone(),
+                selection_reason: resolution.selection_reason.clone(),
+                rendered_prompt: resolution.rendered_prompt.clone(),
+                timestamp: timestamp.to_string(),
+            },
+            runtime_context
+                .map(|context| context.event_metadata())
+                .unwrap_or_default(),
+        );
+
+        if let Err(error) = get_event_bus().dispatch_generic(&event) {
+            eprintln!(
+                "Event dispatch failed for prompt_hook_audit_recorded: {}",
+                error
+            );
         }
     }
 

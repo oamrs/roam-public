@@ -917,6 +917,23 @@ async fn query_service_prompt_hook_metadata_excludes_rendered_prompt() {
         Some(&"priority_match".to_string())
     );
     assert!(!metadata.contains_key("resolved_prompt"));
+
+    let audit_event = events
+        .iter()
+        .find(|event| {
+            matches!(event, Event::PromptHookAuditRecorded { record, .. } if record.db_identifier == test_db_id)
+        })
+        .expect("prompt hook audit event");
+
+    let audit_metadata = audit_event.metadata();
+    assert_eq!(
+        audit_metadata.get("prompt_hook_id"),
+        Some(&"finance-default".to_string())
+    );
+    assert_eq!(
+        audit_metadata.get("rendered_prompt"),
+        Some(&"System prompt for finance on ledger_entries".to_string())
+    );
 }
 
 #[tokio::test]
@@ -956,6 +973,8 @@ async fn validate_query_with_runtime_context_fails_closed_on_ambiguous_prompt_ho
         .expect("response");
 
     assert!(!response.valid);
-    assert!(response.error_message.contains("Prompt hook resolution failed"));
+    assert!(response
+        .error_message
+        .contains("Prompt hook resolution failed"));
     assert!(response.error_message.contains("ambiguous"));
 }
