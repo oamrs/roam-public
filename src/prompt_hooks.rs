@@ -1,3 +1,4 @@
+use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 
@@ -121,8 +122,28 @@ pub trait PromptHookDefinition {
     fn matching_rules_yaml(&self) -> Option<&str>;
 }
 
+pub fn resolve_optional_prompt_hook<T>(
+    hooks: &[T],
+    request: &PromptHookResolveRequest,
+) -> Result<Option<PromptHookResolution>, String>
+where
+    T: PromptHookDefinition,
+{
+    match resolve_prompt_hook(hooks, request) {
+        Ok(resolution) => Ok(Some(resolution)),
+        Err(error)
+            if !has_explicit_prompt_hook_selection(request)
+                && error == NO_MATCHING_PROMPT_HOOK_ERROR =>
+        {
+            Ok(None)
+        }
+        Err(error) => Err(error),
+    }
+}
+
+#[async_trait]
 pub trait PromptHookResolver: Send + Sync {
-    fn resolve(
+    async fn resolve(
         &self,
         request: &PromptHookResolveRequest,
     ) -> Result<Option<PromptHookResolution>, String>;
@@ -139,24 +160,16 @@ impl<T> StaticPromptHookResolver<T> {
     }
 }
 
+#[async_trait]
 impl<T> PromptHookResolver for StaticPromptHookResolver<T>
 where
     T: PromptHookDefinition + Send + Sync,
 {
-    fn resolve(
+    async fn resolve(
         &self,
         request: &PromptHookResolveRequest,
     ) -> Result<Option<PromptHookResolution>, String> {
-        match resolve_prompt_hook(&self.hooks, request) {
-            Ok(resolution) => Ok(Some(resolution)),
-            Err(error)
-                if !has_explicit_prompt_hook_selection(request)
-                    && error == NO_MATCHING_PROMPT_HOOK_ERROR =>
-            {
-                Ok(None)
-            }
-            Err(error) => Err(error),
-        }
+        resolve_optional_prompt_hook(&self.hooks, request)
     }
 }
 

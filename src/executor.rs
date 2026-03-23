@@ -281,8 +281,9 @@ impl QueryServiceImpl {
         policy_context: Option<&PolicyContext>,
         runtime_context: Option<&QueryRuntimeContext>,
     ) -> Result<ValidationResponse, String> {
-        if let Err(error) =
-            self.resolve_runtime_prompt_hook(&request.db_identifier, runtime_context)
+        if let Err(error) = self
+            .resolve_runtime_prompt_hook(&request.db_identifier, runtime_context)
+            .await
         {
             return Ok(ValidationResponse {
                 valid: false,
@@ -430,8 +431,10 @@ impl QueryServiceImpl {
     ) -> Result<ExecuteQueryResponse, String> {
         let start_time = std::time::Instant::now();
 
-        let prompt_hook_resolution =
-            match self.resolve_runtime_prompt_hook(&request.db_identifier, runtime_context) {
+        let prompt_hook_resolution = match self
+            .resolve_runtime_prompt_hook(&request.db_identifier, runtime_context)
+            .await
+        {
                 Ok(resolution) => resolution,
                 Err(error) => {
                     return self
@@ -512,7 +515,7 @@ impl QueryServiceImpl {
         .await
     }
 
-    fn resolve_runtime_prompt_hook(
+    async fn resolve_runtime_prompt_hook(
         &self,
         db_identifier: &str,
         runtime_context: Option<&QueryRuntimeContext>,
@@ -524,7 +527,9 @@ impl QueryServiceImpl {
             return Ok(None);
         };
 
-        resolver.resolve(&runtime_context.prompt_hook_resolve_request(Some(db_identifier)))
+        resolver
+            .resolve(&runtime_context.prompt_hook_resolve_request(Some(db_identifier)))
+            .await
     }
 
     async fn build_validation_error_response(

@@ -31,9 +31,10 @@ pub use policy_engine::{
 };
 pub use prompt_hooks::{
     build_template_variables, parse_matching_rules_yaml, preview_prompt_hook, render_template,
-    resolve_prompt_hook, PromptHookDefinition, PromptHookMatchPreview, PromptHookMatchRules,
-    PromptHookPreviewRequest, PromptHookRequestContext, PromptHookRequestMatchRules,
-    PromptHookResolution, PromptHookResolveRequest, PromptHookResolver, PromptHookSchemaContext,
+    resolve_optional_prompt_hook, resolve_prompt_hook, PromptHookDefinition,
+    PromptHookMatchPreview, PromptHookMatchRules, PromptHookPreviewRequest,
+    PromptHookRequestContext, PromptHookRequestMatchRules, PromptHookResolution,
+    PromptHookResolveRequest, PromptHookResolver, PromptHookSchemaContext,
     PromptHookSchemaMatchRules, PromptHookUpsertRequest, StaticPromptHookResolver,
 };
 pub use runtime_context::QueryRuntimeContext;
