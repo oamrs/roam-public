@@ -435,19 +435,19 @@ impl QueryServiceImpl {
             .resolve_runtime_prompt_hook(&request.db_identifier, runtime_context)
             .await
         {
-                Ok(resolution) => resolution,
-                Err(error) => {
-                    return self
-                        .build_validation_error_response(
-                            &request,
-                            format!("Prompt hook resolution failed: {error}"),
-                            start_time,
-                            runtime_context,
-                            None,
-                        )
-                        .await;
-                }
-            };
+            Ok(resolution) => resolution,
+            Err(error) => {
+                return self
+                    .build_validation_error_response(
+                        &request,
+                        format!("Prompt hook resolution failed: {error}"),
+                        start_time,
+                        runtime_context,
+                        None,
+                    )
+                    .await;
+            }
+        };
 
         if let Some(error_message) = Self::validate_query_policy(&request.query, policy_context) {
             return self
