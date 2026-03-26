@@ -95,6 +95,15 @@ pub enum Event {
 }
 
 impl Event {
+    fn insert_context_metadata(
+        map: &mut HashMap<String, String>,
+        context: &HashMap<String, String>,
+    ) {
+        for (key, value) in context {
+            map.entry(key.clone()).or_insert_with(|| value.clone());
+        }
+    }
+
     pub fn status_change(
         entity_type: String,
         entity_id: String,
@@ -283,7 +292,7 @@ impl Event {
                 map.insert("row_count".to_string(), row_count.to_string());
                 map.insert("execution_ms".to_string(), execution_ms.to_string());
                 map.insert("timestamp".to_string(), timestamp.clone());
-                map.extend(context.clone());
+                Self::insert_context_metadata(&mut map, context);
             }
             Event::QueryValidationFailed {
                 db_identifier,
@@ -296,7 +305,7 @@ impl Event {
                 map.insert("query".to_string(), query.clone());
                 map.insert("error_reason".to_string(), error_reason.clone());
                 map.insert("timestamp".to_string(), timestamp.clone());
-                map.extend(context.clone());
+                Self::insert_context_metadata(&mut map, context);
             }
             Event::QueryExecutionError {
                 db_identifier,
@@ -309,7 +318,7 @@ impl Event {
                 map.insert("query".to_string(), query.clone());
                 map.insert("error_message".to_string(), error_message.clone());
                 map.insert("timestamp".to_string(), timestamp.clone());
-                map.extend(context.clone());
+                Self::insert_context_metadata(&mut map, context);
             }
             Event::PromptHookAuditRecorded { record, context } => {
                 map.insert("db_identifier".to_string(), record.db_identifier.clone());
@@ -328,7 +337,7 @@ impl Event {
                     record.rendered_prompt.clone(),
                 );
                 map.insert("timestamp".to_string(), record.timestamp.clone());
-                map.extend(context.clone());
+                Self::insert_context_metadata(&mut map, context);
             }
             Event::ModelChanged {
                 entity_type,

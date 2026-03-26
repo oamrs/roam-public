@@ -62,6 +62,7 @@ struct SessionRegistry {
 
 impl SessionRegistry {
     async fn insert(&self, session: RegisteredAgentSession) {
+        // TODO: Add lifecycle-aware session expiry or explicit cleanup instead of unbounded retention.
         self.sessions
             .lock()
             .await
