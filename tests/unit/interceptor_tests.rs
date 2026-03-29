@@ -353,7 +353,6 @@ async fn query_event_metadata_preserves_canonical_fields_when_context_conflicts(
     assert_eq!(metadata.get("session_id"), Some(&"session-123".to_string()));
 }
 
-
 #[tokio::test]
 async fn event_bus_generic_dispatch() {
     let _lock = _acquire_test_lock();

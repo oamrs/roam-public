@@ -756,7 +756,7 @@ async fn query_service_runtime_context_is_emitted_in_query_events() {
         session_id: Some("session-456".to_string()),
         organization_id: Some("finance".to_string()),
         tool_name: Some("finance.query".to_string()),
-        prompt_selector_key: Some("finance-default".to_string()),
+        runtime_augmentation_key: Some("finance-default".to_string()),
         ..Default::default()
     };
 
@@ -785,8 +785,7 @@ async fn query_service_runtime_context_is_emitted_in_query_events() {
         Some(&"finance.query".to_string())
     );
     assert_eq!(
-        metadata.get("prompt_selector_key"),
+        metadata.get("runtime_augmentation_key"),
         Some(&"finance-default".to_string())
     );
 }
-

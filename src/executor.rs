@@ -249,7 +249,7 @@ impl QueryServiceImpl {
             Some(
                 decision
                     .reason
-                    .unwrap_or_else(|| "Query rejected by execution policy engine".to_string()),
+                    .unwrap_or_else(|| "Query rejected during policy validation".to_string()),
             )
         }
     }

@@ -191,12 +191,12 @@ impl PolicyEngine {
             ToolIntent::WriteInsert | ToolIntent::WriteUpdate | ToolIntent::WriteDelete => {
                 Self::deny(
                     "unsupported",
-                    "Only read-select intent is currently supported by the public policy engine",
+                    "Only read-select intent is currently supported by this runtime",
                 )
             }
             ToolIntent::Admin => Self::deny(
                 "unsupported",
-                "Administrative SQL intents are not supported by the public policy engine",
+                "Administrative SQL intents are not supported by this runtime",
             ),
         }
     }

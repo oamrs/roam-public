@@ -260,7 +260,7 @@ async fn grpc_query_metadata_is_forwarded_into_query_events() {
         .metadata_mut()
         .insert("x-roam-tool-name", "finance.query".parse().unwrap());
     request.metadata_mut().insert(
-        "x-roam-prompt-selector-key",
+        "x-roam-runtime-augmentation-key",
         "finance-default".parse().unwrap(),
     );
 
@@ -291,13 +291,12 @@ async fn grpc_query_metadata_is_forwarded_into_query_events() {
         Some(&"finance.query".to_string())
     );
     assert_eq!(
-        metadata.get("prompt_selector_key"),
+        metadata.get("runtime_augmentation_key"),
         Some(&"finance-default".to_string())
     );
 
     drop(handle);
 }
-
 
 #[tokio::test]
 async fn registered_session_metadata_is_enriched_into_query_events() {

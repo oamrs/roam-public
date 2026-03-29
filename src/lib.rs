@@ -16,13 +16,13 @@ pub use execution_engine::{
     QueryRequest, QueryResult, ResultStatus,
 };
 pub use executor::{
-    QueryRuntimeAugmentation, QueryRuntimeAugmentor, QueryService, QueryServiceImpl,
-    QueryStatus, SchemaService, SchemaServiceImpl,
+    QueryRuntimeAugmentation, QueryRuntimeAugmentor, QueryService, QueryServiceImpl, QueryStatus,
+    SchemaService, SchemaServiceImpl,
 };
 pub use grpc_executor::GrpcExecutor;
 pub use interceptor::{
-    get_event_bus, CriticalModelBehavior, CriticalStatusEvent, Event, EventBus,
-    HasCriticalStatus, PromptHookAuditRecord,
+    get_event_bus, CriticalModelBehavior, CriticalStatusEvent, Event, EventBus, HasCriticalStatus,
+    RuntimeAugmentationAuditRecord,
 };
 pub use mapper::{GrpcMapper, LocalMapper, Mapper, TcpMapper};
 pub use mirror::{

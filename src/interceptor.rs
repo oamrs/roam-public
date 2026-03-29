@@ -13,13 +13,13 @@ pub struct CriticalStatusEvent {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
-pub struct PromptHookAuditRecord {
+pub struct RuntimeAugmentationAuditRecord {
     pub db_identifier: String,
     pub query: String,
-    pub prompt_hook_id: String,
-    pub prompt_hook_name: String,
+    pub runtime_augmentation_id: String,
+    pub runtime_augmentation_name: String,
     pub selection_reason: String,
-    pub rendered_prompt: String,
+    pub rendered_output: String,
     pub timestamp: String,
 }
 
@@ -79,9 +79,9 @@ pub enum Event {
         #[serde(default, skip_serializing_if = "HashMap::is_empty")]
         context: HashMap<String, String>,
     },
-    #[serde(rename = "PromptHookAuditRecorded")]
-    PromptHookAuditRecorded {
-        record: PromptHookAuditRecord,
+    #[serde(rename = "RuntimeAugmentationAuditRecorded")]
+    RuntimeAugmentationAuditRecorded {
+        record: RuntimeAugmentationAuditRecord,
         #[serde(default, skip_serializing_if = "HashMap::is_empty")]
         context: HashMap<String, String>,
     },
@@ -204,11 +204,11 @@ impl Event {
         }
     }
 
-    pub fn prompt_hook_audit_recorded(
-        record: PromptHookAuditRecord,
+    pub fn runtime_augmentation_audit_recorded(
+        record: RuntimeAugmentationAuditRecord,
         context: HashMap<String, String>,
     ) -> Self {
-        Event::PromptHookAuditRecorded { record, context }
+        Event::RuntimeAugmentationAuditRecorded { record, context }
     }
 
     pub fn model_changed(entity_type: String, entity_id: String, action: String) -> Self {
@@ -228,7 +228,7 @@ impl Event {
             Event::QueryExecuted { .. } => "QueryExecuted",
             Event::QueryValidationFailed { .. } => "QueryValidationFailed",
             Event::QueryExecutionError { .. } => "QueryExecutionError",
-            Event::PromptHookAuditRecorded { .. } => "PromptHookAuditRecorded",
+            Event::RuntimeAugmentationAuditRecorded { .. } => "RuntimeAugmentationAuditRecorded",
             Event::ModelChanged { .. } => "ModelChanged",
         }
     }
@@ -320,21 +320,24 @@ impl Event {
                 map.insert("timestamp".to_string(), timestamp.clone());
                 Self::insert_context_metadata(&mut map, context);
             }
-            Event::PromptHookAuditRecorded { record, context } => {
+            Event::RuntimeAugmentationAuditRecorded { record, context } => {
                 map.insert("db_identifier".to_string(), record.db_identifier.clone());
                 map.insert("query".to_string(), record.query.clone());
-                map.insert("prompt_hook_id".to_string(), record.prompt_hook_id.clone());
                 map.insert(
-                    "prompt_hook_name".to_string(),
-                    record.prompt_hook_name.clone(),
+                    "runtime_augmentation_id".to_string(),
+                    record.runtime_augmentation_id.clone(),
+                );
+                map.insert(
+                    "runtime_augmentation_name".to_string(),
+                    record.runtime_augmentation_name.clone(),
                 );
                 map.insert(
                     "selection_reason".to_string(),
                     record.selection_reason.clone(),
                 );
                 map.insert(
-                    "rendered_prompt".to_string(),
-                    record.rendered_prompt.clone(),
+                    "rendered_output".to_string(),
+                    record.rendered_output.clone(),
                 );
                 map.insert("timestamp".to_string(), record.timestamp.clone());
                 Self::insert_context_metadata(&mut map, context);

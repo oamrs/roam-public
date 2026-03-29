@@ -24,9 +24,9 @@ fn runtime_context_parses_metadata_into_structured_fields() {
         .insert("x-roam-grants", "read:ledger,read:org".parse().unwrap());
     request
         .metadata_mut()
-        .insert("x-roam-prompt-hook-id", "hook-1".parse().unwrap());
+        .insert("x-roam-runtime-augmentation-id", "hook-1".parse().unwrap());
     request.metadata_mut().insert(
-        "x-roam-prompt-selector-key",
+        "x-roam-runtime-augmentation-key",
         "finance-default".parse().unwrap(),
     );
     request
@@ -45,9 +45,9 @@ fn runtime_context_parses_metadata_into_structured_fields() {
     assert_eq!(context.tool_name.as_deref(), Some("finance.query"));
     assert_eq!(context.tool_intent, Some(ToolIntent::ReadSelect));
     assert_eq!(context.grants, vec!["read:ledger", "read:org"]);
-    assert_eq!(context.prompt_hook_id.as_deref(), Some("hook-1"));
+    assert_eq!(context.runtime_augmentation_id.as_deref(), Some("hook-1"));
     assert_eq!(
-        context.prompt_selector_key.as_deref(),
+        context.runtime_augmentation_key.as_deref(),
         Some("finance-default")
     );
     assert_eq!(context.domain_tags, vec!["finance", "accounting"]);
@@ -60,7 +60,7 @@ fn runtime_context_builds_policy_and_event_metadata() {
         tool_name: Some("finance.query".to_string()),
         tool_intent: Some(ToolIntent::ReadSelect),
         grants: vec!["read:ledger".to_string()],
-        prompt_selector_key: Some("finance-default".to_string()),
+        runtime_augmentation_key: Some("finance-default".to_string()),
         session_id: Some("session-123".to_string()),
         ..Default::default()
     }
@@ -77,7 +77,7 @@ fn runtime_context_builds_policy_and_event_metadata() {
     assert_eq!(metadata.get("agent_version"), Some(&"2.4.1".to_string()));
     assert_eq!(metadata.get("schema_mode"), Some(&"HYBRID".to_string()));
     assert_eq!(
-        metadata.get("prompt_selector_key"),
+        metadata.get("runtime_augmentation_key"),
         Some(&"finance-default".to_string())
     );
     assert_eq!(
@@ -85,4 +85,3 @@ fn runtime_context_builds_policy_and_event_metadata() {
         Some(&"finance.query".to_string())
     );
 }
-

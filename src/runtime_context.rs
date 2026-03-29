@@ -11,8 +11,8 @@ const ORGANIZATION_ID_HEADER: &str = "x-roam-organization-id";
 const TOOL_NAME_HEADER: &str = "x-roam-tool-name";
 const TOOL_INTENT_HEADER: &str = "x-roam-tool-intent";
 const GRANTS_HEADER: &str = "x-roam-grants";
-const PROMPT_HOOK_ID_HEADER: &str = "x-roam-prompt-hook-id";
-const PROMPT_SELECTOR_KEY_HEADER: &str = "x-roam-prompt-selector-key";
+const RUNTIME_AUGMENTATION_ID_HEADER: &str = "x-roam-runtime-augmentation-id";
+const RUNTIME_AUGMENTATION_KEY_HEADER: &str = "x-roam-runtime-augmentation-key";
 const DOMAIN_TAGS_HEADER: &str = "x-roam-domain-tags";
 const TABLE_NAMES_HEADER: &str = "x-roam-table-names";
 
@@ -27,8 +27,8 @@ pub struct QueryRuntimeContext {
     pub tool_name: Option<String>,
     pub tool_intent: Option<ToolIntent>,
     pub grants: Vec<String>,
-    pub prompt_hook_id: Option<String>,
-    pub prompt_selector_key: Option<String>,
+    pub runtime_augmentation_id: Option<String>,
+    pub runtime_augmentation_key: Option<String>,
     pub domain_tags: Vec<String>,
     pub table_names: Vec<String>,
 }
@@ -46,8 +46,8 @@ impl QueryRuntimeContext {
             tool_intent: get_ascii_metadata(metadata, TOOL_INTENT_HEADER)
                 .and_then(|value| parse_tool_intent(&value)),
             grants: get_csv_metadata(metadata, GRANTS_HEADER),
-            prompt_hook_id: get_ascii_metadata(metadata, PROMPT_HOOK_ID_HEADER),
-            prompt_selector_key: get_ascii_metadata(metadata, PROMPT_SELECTOR_KEY_HEADER),
+            runtime_augmentation_id: get_ascii_metadata(metadata, RUNTIME_AUGMENTATION_ID_HEADER),
+            runtime_augmentation_key: get_ascii_metadata(metadata, RUNTIME_AUGMENTATION_KEY_HEADER),
             domain_tags: get_csv_metadata(metadata, DOMAIN_TAGS_HEADER),
             table_names: get_csv_metadata(metadata, TABLE_NAMES_HEADER),
         }
@@ -63,8 +63,8 @@ impl QueryRuntimeContext {
             || self.tool_name.is_some()
             || self.tool_intent.is_some()
             || !self.grants.is_empty()
-            || self.prompt_hook_id.is_some()
-            || self.prompt_selector_key.is_some()
+            || self.runtime_augmentation_id.is_some()
+            || self.runtime_augmentation_key.is_some()
             || !self.domain_tags.is_empty()
             || !self.table_names.is_empty()
     }
@@ -114,13 +114,13 @@ impl QueryRuntimeContext {
         );
         insert_optional(
             &mut metadata,
-            "prompt_hook_id",
-            self.prompt_hook_id.as_ref(),
+            "runtime_augmentation_id",
+            self.runtime_augmentation_id.as_ref(),
         );
         insert_optional(
             &mut metadata,
-            "prompt_selector_key",
-            self.prompt_selector_key.as_ref(),
+            "runtime_augmentation_key",
+            self.runtime_augmentation_key.as_ref(),
         );
 
         if !self.grants.is_empty() {
@@ -211,4 +211,3 @@ fn insert_optional<S: Into<String>>(
         metadata.insert(key.to_string(), value.into());
     }
 }
-

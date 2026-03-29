@@ -1,7 +1,7 @@
 use crate::executor::{
     ExecuteQueryRequest, GetSchemaRequest as ExecGetSchemaRequest,
-    GetTableRequest as ExecGetTableRequest, QueryRuntimeAugmentor, QueryServiceImpl,
-    SchemaService, SchemaServiceImpl, ValidateQueryRequest,
+    GetTableRequest as ExecGetTableRequest, QueryRuntimeAugmentor, QueryServiceImpl, SchemaService,
+    SchemaServiceImpl, ValidateQueryRequest,
 };
 use crate::interceptor::{get_event_bus, Event as DomainEvent};
 use crate::runtime_context::QueryRuntimeContext;
@@ -61,7 +61,7 @@ struct SessionRegistry {
 
 impl SessionRegistry {
     async fn insert(&self, session: RegisteredAgentSession) {
-        // TODO: Add lifecycle-aware session expiry or explicit cleanup instead of unbounded retention.
+        // TODO: Add session lifecycle management so stored registrations can expire or be cleared explicitly.
         self.sessions
             .lock()
             .await
@@ -256,13 +256,8 @@ impl ProtoQueryService for GrpcQueryServiceImpl {
             timeout_seconds: req.timeout_seconds,
         };
 
-        // TODO: Enforce CODE_FIRST / DATA_FIRST modes.
-        // SECURITY NOTE: This is currently a Client-Side only check.
-        // To be secure, we MUST:
-        // 1. Retrieve session/agent state associated with this request (via metadata/headers).
-        // 2. If CODE_FIRST: Parse table name and verify it exists in the *registered* schema (not just DB schema).
-        // 3. If DATA_FIRST: Allow if table exists in DB schema (Introspection).
-        // Failure to implement this allows malicious clients to bypass schema restrictions.
+        // TODO: Enforce schema mode consistently on the service side using the request's
+        // registered runtime context before execution continues.
 
         let service = self.inner.lock().await;
         match service
@@ -302,9 +297,8 @@ impl ProtoQueryService for GrpcQueryServiceImpl {
             parameters: Default::default(),
         };
 
-        // TODO: Enforce CODE_FIRST / DATA_FIRST modes during validation as well.
-        // SECURITY NOTE: This is currently a Client-Side only check.
-        // Requires resolving the agent's session/mode and registry from request metadata.
+        // TODO: Enforce schema mode consistently during validation using the request's
+        // registered runtime context.
 
         let service = self.inner.lock().await;
         match service
