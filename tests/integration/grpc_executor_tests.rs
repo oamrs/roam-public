@@ -1,6 +1,5 @@
 use oam::grpc_executor::GrpcExecutor;
 use oam::interceptor::get_event_bus;
-use oam::prompt_hooks::{PromptHookDefinition, StaticPromptHookResolver};
 use roam_proto::v1::agent::agent_service_client::AgentServiceClient;
 use roam_proto::v1::agent::{ConnectRequest, SchemaMode};
 use roam_proto::v1::query::query_service_client::QueryServiceClient;
@@ -8,68 +7,7 @@ use roam_proto::v1::query::ExecuteQueryRequest;
 use roam_proto::v1::schema::schema_service_client::SchemaServiceClient;
 use roam_proto::v1::schema::GetSchemaRequest;
 use std::path::PathBuf;
-use std::sync::Arc;
 use std::time::Duration;
-
-#[derive(Clone)]
-struct TestPromptHook {
-    id: String,
-    name: String,
-    enabled: bool,
-    priority: i32,
-    selector_key: Option<String>,
-    markdown_template: String,
-    matching_rules_yaml: Option<String>,
-}
-
-impl PromptHookDefinition for TestPromptHook {
-    fn id(&self) -> &str {
-        &self.id
-    }
-
-    fn name(&self) -> &str {
-        &self.name
-    }
-
-    fn enabled(&self) -> bool {
-        self.enabled
-    }
-
-    fn priority(&self) -> i32 {
-        self.priority
-    }
-
-    fn selector_key(&self) -> Option<&str> {
-        self.selector_key.as_deref()
-    }
-
-    fn markdown_template(&self) -> &str {
-        &self.markdown_template
-    }
-
-    fn matching_rules_yaml(&self) -> Option<&str> {
-        self.matching_rules_yaml.as_deref()
-    }
-}
-
-fn test_prompt_hook(
-    id: &str,
-    name: &str,
-    priority: i32,
-    selector_key: Option<&str>,
-    matching_rules_yaml: Option<&str>,
-    markdown_template: &str,
-) -> TestPromptHook {
-    TestPromptHook {
-        id: id.to_string(),
-        name: name.to_string(),
-        enabled: true,
-        priority,
-        selector_key: selector_key.map(ToString::to_string),
-        markdown_template: markdown_template.to_string(),
-        matching_rules_yaml: matching_rules_yaml.map(ToString::to_string),
-    }
-}
 
 fn test_db_path() -> String {
     let mut path = PathBuf::from(std::env::temp_dir());
@@ -360,94 +298,6 @@ async fn grpc_query_metadata_is_forwarded_into_query_events() {
     drop(handle);
 }
 
-#[tokio::test]
-async fn grpc_prompt_hook_resolution_is_emitted_into_query_events() {
-    let event_bus = get_event_bus();
-    let _ = event_bus.clear();
-
-    let db_path = test_db_path();
-    let executor = GrpcExecutor::new(&db_path)
-        .expect("Failed to create GrpcExecutor")
-        .with_prompt_hook_resolver(Arc::new(StaticPromptHookResolver::new(vec![
-            test_prompt_hook(
-                "finance-default",
-                "Finance Default",
-                50,
-                Some("finance-default"),
-                None,
-                "Runtime prompt for {{organization_id}}",
-            ),
-        ])));
-
-    let port = get_available_port().expect("Failed to get available port");
-    let addr_str = format!("127.0.0.1:{}", port);
-
-    let handle = executor
-        .start_server(&addr_str)
-        .await
-        .expect("Failed to start server");
-
-    tokio::time::sleep(Duration::from_millis(200)).await;
-
-    let addr = format!("http://127.0.0.1:{}", port);
-    let mut client = QueryServiceClient::connect(addr)
-        .await
-        .expect("connect query client");
-
-    let db_identifier = "grpc-prompt-hook-db".to_string();
-    let mut request = tonic::Request::new(ExecuteQueryRequest {
-        db_identifier: db_identifier.clone(),
-        query: "SELECT * FROM users; DROP TABLE users;".to_string(),
-        limit: 10,
-        timeout_seconds: 5,
-    });
-    request
-        .metadata_mut()
-        .insert("x-roam-organization-id", "finance".parse().unwrap());
-    request.metadata_mut().insert(
-        "x-roam-prompt-selector-key",
-        "finance-default".parse().unwrap(),
-    );
-
-    let _response = client
-        .execute_query(request)
-        .await
-        .expect("execute query rpc");
-
-    let events = event_bus.all_events().expect("get events");
-    let event = events
-        .iter()
-        .find(|event| {
-            matches!(event, oam::Event::QueryValidationFailed { db_identifier: event_db_identifier, .. } if event_db_identifier == &db_identifier)
-        })
-        .expect("grpc validation failed event");
-
-    let metadata = event.metadata();
-    assert_eq!(
-        metadata.get("resolved_prompt_hook_id"),
-        Some(&"finance-default".to_string())
-    );
-    assert!(!metadata.contains_key("resolved_prompt"));
-
-    let audit_event = events
-        .iter()
-        .find(|event| {
-            matches!(event, oam::Event::PromptHookAuditRecorded { record, .. } if record.db_identifier == db_identifier)
-        })
-        .expect("grpc prompt hook audit event");
-
-    let audit_metadata = audit_event.metadata();
-    assert_eq!(
-        audit_metadata.get("prompt_hook_id"),
-        Some(&"finance-default".to_string())
-    );
-    assert_eq!(
-        audit_metadata.get("rendered_prompt"),
-        Some(&"Runtime prompt for finance".to_string())
-    );
-
-    drop(handle);
-}
 
 #[tokio::test]
 async fn registered_session_metadata_is_enriched_into_query_events() {

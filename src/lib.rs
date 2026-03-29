@@ -7,7 +7,6 @@ pub mod interceptor;
 pub mod mapper;
 pub mod mirror;
 pub mod policy_engine;
-pub mod prompt_hooks;
 pub mod runtime_context;
 pub mod tcp;
 
@@ -16,10 +15,14 @@ pub use execution_engine::{
     CancellationToken, ConnectionPool, ExecutionEngine, ExecutionMetrics, PoolStats, QueryPriority,
     QueryRequest, QueryResult, ResultStatus,
 };
-pub use executor::{QueryService, QueryServiceImpl, QueryStatus, SchemaService, SchemaServiceImpl};
+pub use executor::{
+    QueryRuntimeAugmentation, QueryRuntimeAugmentor, QueryService, QueryServiceImpl,
+    QueryStatus, SchemaService, SchemaServiceImpl,
+};
 pub use grpc_executor::GrpcExecutor;
 pub use interceptor::{
-    get_event_bus, CriticalModelBehavior, CriticalStatusEvent, Event, EventBus, HasCriticalStatus,
+    get_event_bus, CriticalModelBehavior, CriticalStatusEvent, Event, EventBus,
+    HasCriticalStatus, PromptHookAuditRecord,
 };
 pub use mapper::{GrpcMapper, LocalMapper, Mapper, TcpMapper};
 pub use mirror::{
@@ -28,14 +31,6 @@ pub use mirror::{
 pub use policy_engine::{
     AuthorizationContext, AuthorizedSubqueryShape, PolicyContext, PolicyDecision, PolicyEngine,
     SubqueryPolicy, ToolContract, ToolIntent,
-};
-pub use prompt_hooks::{
-    build_template_variables, parse_matching_rules_yaml, preview_prompt_hook, render_template,
-    resolve_optional_prompt_hook, resolve_prompt_hook, PromptHookDefinition,
-    PromptHookMatchPreview, PromptHookMatchRules, PromptHookPreviewRequest,
-    PromptHookRequestContext, PromptHookRequestMatchRules, PromptHookResolution,
-    PromptHookResolveRequest, PromptHookResolver, PromptHookSchemaContext,
-    PromptHookSchemaMatchRules, PromptHookUpsertRequest, StaticPromptHookResolver,
 };
 pub use runtime_context::QueryRuntimeContext;
 pub use tcp::{

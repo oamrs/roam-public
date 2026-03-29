@@ -1,12 +1,7 @@
 use crate::policy_engine::{
     AuthorizationContext, PolicyContext, SubqueryPolicy, ToolContract, ToolIntent,
 };
-use crate::prompt_hooks::{
-    PromptHookRequestContext, PromptHookResolution, PromptHookResolveRequest,
-    PromptHookSchemaContext,
-};
 use serde::{Deserialize, Serialize};
-use std::collections::BTreeMap;
 use std::collections::HashMap;
 use tonic::metadata::MetadataMap;
 
@@ -141,83 +136,6 @@ impl QueryRuntimeContext {
         metadata
     }
 
-    pub fn event_metadata_with_prompt_hook_resolution(
-        &self,
-        resolution: Option<&PromptHookResolution>,
-    ) -> HashMap<String, String> {
-        let mut metadata = self.event_metadata();
-
-        if let Some(resolution) = resolution {
-            metadata.insert(
-                "resolved_prompt_hook_id".to_string(),
-                resolution.selected_hook_id.clone(),
-            );
-            metadata.insert(
-                "resolved_prompt_hook_name".to_string(),
-                resolution.selected_hook_name.clone(),
-            );
-            metadata.insert(
-                "resolved_prompt_hook_selection_reason".to_string(),
-                resolution.selection_reason.clone(),
-            );
-            if !resolution.matched_hook_ids.is_empty() {
-                metadata.insert(
-                    "resolved_prompt_hook_matched_ids".to_string(),
-                    resolution.matched_hook_ids.join(","),
-                );
-            }
-        }
-
-        metadata
-    }
-
-    pub fn prompt_hook_resolve_request(
-        &self,
-        db_identifier: Option<&str>,
-    ) -> PromptHookResolveRequest {
-        let mut additional_variables = BTreeMap::new();
-
-        insert_btree_optional(
-            &mut additional_variables,
-            "agent_id",
-            self.agent_id.as_ref(),
-        );
-        insert_btree_optional(
-            &mut additional_variables,
-            "agent_version",
-            self.agent_version.as_ref(),
-        );
-        insert_btree_optional(
-            &mut additional_variables,
-            "schema_mode",
-            self.schema_mode.as_ref(),
-        );
-        insert_btree_optional(
-            &mut additional_variables,
-            "tool_intent",
-            self.tool_intent.as_ref().map(tool_intent_name),
-        );
-
-        PromptHookResolveRequest {
-            explicit_hook_id: self.prompt_hook_id.clone(),
-            explicit_selector_key: self.prompt_selector_key.clone(),
-            request_context: PromptHookRequestContext {
-                user_id: self.user_id.clone(),
-                organization_id: self.organization_id.clone(),
-                tool_name: self.tool_name.clone(),
-                session_id: self.session_id.clone(),
-                headers: BTreeMap::new(),
-                grants: self.grants.clone(),
-            },
-            schema_context: PromptHookSchemaContext {
-                database_id: db_identifier.map(ToOwned::to_owned),
-                table_names: self.table_names.clone(),
-                domain_tags: self.domain_tags.clone(),
-            },
-            additional_variables,
-        }
-    }
-
     pub fn with_registered_agent(
         mut self,
         agent_id: &str,
@@ -294,12 +212,3 @@ fn insert_optional<S: Into<String>>(
     }
 }
 
-fn insert_btree_optional<S: Into<String>>(
-    metadata: &mut BTreeMap<String, String>,
-    key: &str,
-    value: Option<S>,
-) {
-    if let Some(value) = value {
-        metadata.insert(key.to_string(), value.into());
-    }
-}

@@ -1,10 +1,9 @@
 use crate::executor::{
     ExecuteQueryRequest, GetSchemaRequest as ExecGetSchemaRequest,
-    GetTableRequest as ExecGetTableRequest, QueryServiceImpl, SchemaService, SchemaServiceImpl,
-    ValidateQueryRequest,
+    GetTableRequest as ExecGetTableRequest, QueryRuntimeAugmentor, QueryServiceImpl,
+    SchemaService, SchemaServiceImpl, ValidateQueryRequest,
 };
 use crate::interceptor::{get_event_bus, Event as DomainEvent};
-use crate::prompt_hooks::PromptHookResolver;
 use crate::runtime_context::QueryRuntimeContext;
 use roam_proto::v1::agent::SchemaMode;
 use std::collections::HashMap;
@@ -37,7 +36,7 @@ pub struct GrpcExecutor {
     query_service: Arc<Mutex<QueryServiceImpl>>,
     schema_service: Arc<Mutex<SchemaServiceImpl>>,
     sessions: Arc<SessionRegistry>,
-    prompt_hook_resolver: Option<Arc<dyn PromptHookResolver>>,
+    runtime_augmentor: Option<Arc<dyn QueryRuntimeAugmentor>>,
 }
 
 /// Basic implementation of AgentService for registration and event streaming
@@ -183,12 +182,12 @@ impl GrpcExecutor {
             query_service: Arc::new(Mutex::new(query_service)),
             schema_service: Arc::new(Mutex::new(schema_service)),
             sessions: Arc::new(SessionRegistry::default()),
-            prompt_hook_resolver: None,
+            runtime_augmentor: None,
         })
     }
 
-    pub fn with_prompt_hook_resolver(mut self, resolver: Arc<dyn PromptHookResolver>) -> Self {
-        self.prompt_hook_resolver = Some(resolver);
+    pub fn with_runtime_augmentor(mut self, augmentor: Arc<dyn QueryRuntimeAugmentor>) -> Self {
+        self.runtime_augmentor = Some(augmentor);
         self
     }
 
@@ -198,9 +197,9 @@ impl GrpcExecutor {
     ) -> Result<tokio::task::JoinHandle<()>, Box<dyn std::error::Error>> {
         let addr_parsed = addr.parse()?;
 
-        if let Some(resolver) = self.prompt_hook_resolver.clone() {
+        if let Some(augmentor) = self.runtime_augmentor.clone() {
             let mut query_service = self.query_service.lock().await;
-            query_service.set_prompt_hook_resolver(resolver);
+            query_service.set_runtime_augmentor(augmentor);
         }
 
         let query_svc = GrpcQueryServiceImpl {

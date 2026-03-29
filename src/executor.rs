@@ -1,5 +1,4 @@
 use crate::policy_engine::{PolicyContext, PolicyEngine, ToolIntent};
-use crate::prompt_hooks::{PromptHookResolution, PromptHookResolver};
 use crate::runtime_context::QueryRuntimeContext;
 use once_cell::sync::Lazy;
 use rusqlite::Connection;
@@ -52,6 +51,24 @@ pub enum QueryStatus {
     ExecutionError = 3,
     Timeout = 4,
     Unauthorized = 5,
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+pub struct QueryRuntimeAugmentation {
+    #[serde(default, skip_serializing_if = "HashMap::is_empty")]
+    pub event_metadata: HashMap<String, String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub audit_events: Vec<crate::interceptor::Event>,
+}
+
+#[async_trait::async_trait]
+pub trait QueryRuntimeAugmentor: Send + Sync {
+    async fn augment(
+        &self,
+        db_identifier: &str,
+        query: &str,
+        runtime_context: &QueryRuntimeContext,
+    ) -> Result<QueryRuntimeAugmentation, String>;
 }
 
 #[async_trait::async_trait]
@@ -200,14 +217,14 @@ impl SchemaService for SchemaServiceImpl {
 
 pub struct QueryServiceImpl {
     db_path: Option<String>,
-    prompt_hook_resolver: Option<Arc<dyn PromptHookResolver>>,
+    runtime_augmentor: Option<Arc<dyn QueryRuntimeAugmentor>>,
 }
 
 impl QueryServiceImpl {
     pub fn new() -> Self {
         Self {
             db_path: None,
-            prompt_hook_resolver: None,
+            runtime_augmentor: None,
         }
     }
 
@@ -216,8 +233,8 @@ impl QueryServiceImpl {
         Ok(())
     }
 
-    pub fn set_prompt_hook_resolver(&mut self, resolver: Arc<dyn PromptHookResolver>) {
-        self.prompt_hook_resolver = Some(resolver);
+    pub fn set_runtime_augmentor(&mut self, augmentor: Arc<dyn QueryRuntimeAugmentor>) {
+        self.runtime_augmentor = Some(augmentor);
     }
 
     fn evaluate_policy(query: &str, policy_context: Option<&PolicyContext>) -> Option<String> {
@@ -282,12 +299,12 @@ impl QueryServiceImpl {
         runtime_context: Option<&QueryRuntimeContext>,
     ) -> Result<ValidationResponse, String> {
         if let Err(error) = self
-            .resolve_runtime_prompt_hook(&request.db_identifier, runtime_context)
+            .augment_runtime_context(&request.db_identifier, &request.query, runtime_context)
             .await
         {
             return Ok(ValidationResponse {
                 valid: false,
-                error_message: format!("Prompt hook resolution failed: {error}"),
+                error_message: format!("Runtime context augmentation failed: {error}"),
             });
         }
 
@@ -431,16 +448,16 @@ impl QueryServiceImpl {
     ) -> Result<ExecuteQueryResponse, String> {
         let start_time = std::time::Instant::now();
 
-        let prompt_hook_resolution = match self
-            .resolve_runtime_prompt_hook(&request.db_identifier, runtime_context)
+        let runtime_augmentation = match self
+            .augment_runtime_context(&request.db_identifier, &request.query, runtime_context)
             .await
         {
-            Ok(resolution) => resolution,
+            Ok(augmentation) => augmentation,
             Err(error) => {
                 return self
                     .build_validation_error_response(
                         &request,
-                        format!("Prompt hook resolution failed: {error}"),
+                        format!("Runtime context augmentation failed: {error}"),
                         start_time,
                         runtime_context,
                         None,
@@ -456,7 +473,7 @@ impl QueryServiceImpl {
                     error_message,
                     start_time,
                     runtime_context,
-                    prompt_hook_resolution.as_ref(),
+                    runtime_augmentation.as_ref(),
                 )
                 .await;
         }
@@ -471,7 +488,7 @@ impl QueryServiceImpl {
                         error_msg,
                         start_time,
                         runtime_context,
-                        prompt_hook_resolution.as_ref(),
+                        runtime_augmentation.as_ref(),
                     )
                     .await;
             }
@@ -492,7 +509,7 @@ impl QueryServiceImpl {
                     validation_result.error_message,
                     start_time,
                     runtime_context,
-                    prompt_hook_resolution.as_ref(),
+                    runtime_augmentation.as_ref(),
                 )
                 .await;
         }
@@ -510,26 +527,28 @@ impl QueryServiceImpl {
             execution_result,
             start_time,
             runtime_context,
-            prompt_hook_resolution.as_ref(),
+            runtime_augmentation.as_ref(),
         )
         .await
     }
 
-    async fn resolve_runtime_prompt_hook(
+    async fn augment_runtime_context(
         &self,
         db_identifier: &str,
+        query: &str,
         runtime_context: Option<&QueryRuntimeContext>,
-    ) -> Result<Option<PromptHookResolution>, String> {
+    ) -> Result<Option<QueryRuntimeAugmentation>, String> {
         let Some(runtime_context) = runtime_context else {
             return Ok(None);
         };
-        let Some(resolver) = &self.prompt_hook_resolver else {
+        let Some(augmentor) = &self.runtime_augmentor else {
             return Ok(None);
         };
 
-        resolver
-            .resolve(&runtime_context.prompt_hook_resolve_request(Some(db_identifier)))
+        augmentor
+            .augment(db_identifier, query, runtime_context)
             .await
+            .map(Some)
     }
 
     async fn build_validation_error_response(
@@ -538,7 +557,7 @@ impl QueryServiceImpl {
         error_message: String,
         start_time: std::time::Instant,
         runtime_context: Option<&QueryRuntimeContext>,
-        prompt_hook_resolution: Option<&PromptHookResolution>,
+        runtime_augmentation: Option<&QueryRuntimeAugmentation>,
     ) -> Result<ExecuteQueryResponse, String> {
         use crate::interceptor::{get_event_bus, Event};
         use chrono::Utc;
@@ -546,23 +565,14 @@ impl QueryServiceImpl {
         let execution_ms = start_time.elapsed().as_millis() as i32;
         let timestamp = Utc::now().to_rfc3339();
 
-        Self::dispatch_prompt_hook_audit_event(
-            request,
-            runtime_context,
-            prompt_hook_resolution,
-            &timestamp,
-        );
+        Self::dispatch_audit_events(runtime_augmentation);
 
         let event = Event::query_validation_failed(
             request.db_identifier.clone(),
             request.query.clone(),
             error_message.clone(),
             timestamp.clone(),
-            runtime_context
-                .map(|context| {
-                    context.event_metadata_with_prompt_hook_resolution(prompt_hook_resolution)
-                })
-                .unwrap_or_default(),
+            Self::merged_event_metadata(runtime_context, runtime_augmentation),
         );
         if let Err(e) = get_event_bus().dispatch_generic(&event) {
             eprintln!("Event dispatch failed for query_validation_failed: {}", e);
@@ -583,7 +593,7 @@ impl QueryServiceImpl {
         error_message: String,
         start_time: std::time::Instant,
         runtime_context: Option<&QueryRuntimeContext>,
-        prompt_hook_resolution: Option<&PromptHookResolution>,
+        runtime_augmentation: Option<&QueryRuntimeAugmentation>,
     ) -> Result<ExecuteQueryResponse, String> {
         use crate::interceptor::{get_event_bus, Event};
         use chrono::Utc;
@@ -591,23 +601,14 @@ impl QueryServiceImpl {
         let execution_ms = start_time.elapsed().as_millis() as i32;
         let timestamp = Utc::now().to_rfc3339();
 
-        Self::dispatch_prompt_hook_audit_event(
-            request,
-            runtime_context,
-            prompt_hook_resolution,
-            &timestamp,
-        );
+        Self::dispatch_audit_events(runtime_augmentation);
 
         let event = Event::query_execution_error(
             request.db_identifier.clone(),
             request.query.clone(),
             error_message.clone(),
             timestamp.clone(),
-            runtime_context
-                .map(|context| {
-                    context.event_metadata_with_prompt_hook_resolution(prompt_hook_resolution)
-                })
-                .unwrap_or_default(),
+            Self::merged_event_metadata(runtime_context, runtime_augmentation),
         );
         if let Err(e) = get_event_bus().dispatch_generic(&event) {
             eprintln!("Event dispatch failed for query_execution_error: {}", e);
@@ -628,7 +629,7 @@ impl QueryServiceImpl {
         execution_result: Result<i64, String>,
         start_time: std::time::Instant,
         runtime_context: Option<&QueryRuntimeContext>,
-        prompt_hook_resolution: Option<&PromptHookResolution>,
+        runtime_augmentation: Option<&QueryRuntimeAugmentation>,
     ) -> Result<ExecuteQueryResponse, String> {
         use crate::interceptor::{get_event_bus, Event};
         use chrono::Utc;
@@ -638,12 +639,7 @@ impl QueryServiceImpl {
 
         match execution_result {
             Ok(row_count) => {
-                Self::dispatch_prompt_hook_audit_event(
-                    request,
-                    runtime_context,
-                    prompt_hook_resolution,
-                    &timestamp,
-                );
+                Self::dispatch_audit_events(runtime_augmentation);
 
                 let event = Event::query_executed(
                     request.db_identifier.clone(),
@@ -652,12 +648,7 @@ impl QueryServiceImpl {
                     row_count as i32,
                     execution_ms,
                     timestamp.clone(),
-                    runtime_context
-                        .map(|context| {
-                            context
-                                .event_metadata_with_prompt_hook_resolution(prompt_hook_resolution)
-                        })
-                        .unwrap_or_default(),
+                    Self::merged_event_metadata(runtime_context, runtime_augmentation),
                 );
                 if let Err(e) = get_event_bus().dispatch_generic(&event) {
                     eprintln!("Event dispatch failed for query_executed: {}", e);
@@ -678,46 +669,42 @@ impl QueryServiceImpl {
                     execution_ms,
                     timestamp,
                     runtime_context,
-                    prompt_hook_resolution,
+                    runtime_augmentation,
                 )
                 .await
             }
         }
     }
 
-    fn dispatch_prompt_hook_audit_event(
-        request: &ExecuteQueryRequest,
-        runtime_context: Option<&QueryRuntimeContext>,
-        prompt_hook_resolution: Option<&PromptHookResolution>,
-        timestamp: &str,
-    ) {
-        use crate::interceptor::{get_event_bus, Event};
+    fn dispatch_audit_events(runtime_augmentation: Option<&QueryRuntimeAugmentation>) {
+        use crate::interceptor::get_event_bus;
 
-        let Some(resolution) = prompt_hook_resolution else {
+        let Some(runtime_augmentation) = runtime_augmentation else {
             return;
         };
 
-        let event = Event::prompt_hook_audit_recorded(
-            crate::interceptor::PromptHookAuditRecord {
-                db_identifier: request.db_identifier.clone(),
-                query: request.query.clone(),
-                prompt_hook_id: resolution.selected_hook_id.clone(),
-                prompt_hook_name: resolution.selected_hook_name.clone(),
-                selection_reason: resolution.selection_reason.clone(),
-                rendered_prompt: resolution.rendered_prompt.clone(),
-                timestamp: timestamp.to_string(),
-            },
-            runtime_context
-                .map(|context| context.event_metadata())
-                .unwrap_or_default(),
-        );
-
-        if let Err(error) = get_event_bus().dispatch_generic(&event) {
-            eprintln!(
-                "Event dispatch failed for prompt_hook_audit_recorded: {}",
-                error
-            );
+        for event in &runtime_augmentation.audit_events {
+            if let Err(error) = get_event_bus().dispatch_generic(event) {
+                eprintln!("Event dispatch failed for runtime audit event: {}", error);
+            }
         }
+    }
+
+    fn merged_event_metadata(
+        runtime_context: Option<&QueryRuntimeContext>,
+        runtime_augmentation: Option<&QueryRuntimeAugmentation>,
+    ) -> HashMap<String, String> {
+        let mut metadata = runtime_context
+            .map(QueryRuntimeContext::event_metadata)
+            .unwrap_or_default();
+
+        if let Some(runtime_augmentation) = runtime_augmentation {
+            for (key, value) in &runtime_augmentation.event_metadata {
+                metadata.insert(key.clone(), value.clone());
+            }
+        }
+
+        metadata
     }
 
     async fn handle_execution_error(
@@ -727,7 +714,7 @@ impl QueryServiceImpl {
         execution_ms: i32,
         timestamp: String,
         runtime_context: Option<&QueryRuntimeContext>,
-        prompt_hook_resolution: Option<&PromptHookResolution>,
+        runtime_augmentation: Option<&QueryRuntimeAugmentation>,
     ) -> Result<ExecuteQueryResponse, String> {
         use crate::interceptor::{get_event_bus, Event};
 
@@ -746,11 +733,7 @@ impl QueryServiceImpl {
             request.query.clone(),
             error.clone(),
             timestamp.clone(),
-            runtime_context
-                .map(|context| {
-                    context.event_metadata_with_prompt_hook_resolution(prompt_hook_resolution)
-                })
-                .unwrap_or_default(),
+            Self::merged_event_metadata(runtime_context, runtime_augmentation),
         );
         if let Err(e) = get_event_bus().dispatch_generic(&event) {
             eprintln!(
