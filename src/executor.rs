@@ -700,7 +700,7 @@ impl QueryServiceImpl {
 
         if let Some(runtime_augmentation) = runtime_augmentation {
             for (key, value) in &runtime_augmentation.event_metadata {
-                metadata.insert(key.clone(), value.clone());
+                metadata.entry(key.clone()).or_insert_with(|| value.clone());
             }
         }
 
