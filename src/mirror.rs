@@ -7,7 +7,6 @@ use schemars::schema::{
 };
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
-use indexmap::IndexMap;
 use std::collections::BTreeSet;
 
 #[derive(Debug, Serialize, Deserialize, JsonSchema, PartialEq)]
@@ -65,11 +64,23 @@ impl SchemaModel {
     /// This schema defines an Object where keys are Table Names and values are Objects
     /// representing a row in that table.
     pub fn to_json_schema(&self) -> RootSchema {
-        let mut root_properties: IndexMap<String, Schema> = IndexMap::new();
+        let mut root = SchemaObject {
+            instance_type: Some(SingleOrVec::Single(Box::new(InstanceType::Object))),
+            ..Default::default()
+        };
 
         for table in &self.tables {
-            let mut col_properties: IndexMap<String, Schema> = IndexMap::new();
+            let mut table_schema = SchemaObject {
+                instance_type: Some(SingleOrVec::Single(Box::new(InstanceType::Object))),
+                metadata: Some(Box::new(Metadata {
+                    description: Some(format!("Table: {}", table.name)),
+                    ..Default::default()
+                })),
+                ..Default::default()
+            };
+
             let mut required_cols = BTreeSet::new();
+
             for col in &table.columns {
                 let sql_upper = col.sql_type.to_uppercase();
                 let instance_type = if sql_upper.contains("INT") {
@@ -113,39 +124,27 @@ impl SchemaModel {
                     required_cols.insert(col.name.clone());
                 }
 
-                col_properties.insert(col.name.clone(), Schema::Object(schema_obj));
+                table_schema
+                    .object
+                    .get_or_insert_with(Default::default)
+                    .properties
+                    .insert(col.name.clone(), Schema::Object(schema_obj));
             }
 
-            let table_schema = SchemaObject {
-                instance_type: Some(SingleOrVec::Single(Box::new(InstanceType::Object))),
-                object: Some(Box::new(ObjectValidation {
-                    properties: col_properties,
-                    required: required_cols,
-                    ..Default::default()
-                })),
-                metadata: Some(Box::new(Metadata {
-                    description: Some(format!("Table: {}", table.name)),
-                    ..Default::default()
-                })),
-                ..Default::default()
-            };
+            table_schema
+                .object
+                .get_or_insert_with(Default::default)
+                .required = required_cols;
 
-            root_properties.insert(table.name.clone(), Schema::Object(table_schema));
+            root.object
+                .get_or_insert_with(Default::default)
+                .properties
+                .insert(table.name.clone(), Schema::Object(table_schema));
         }
-
-        let root = SchemaObject {
-            instance_type: Some(SingleOrVec::Single(Box::new(InstanceType::Object))),
-            object: Some(Box::new(ObjectValidation {
-                properties: root_properties,
-                ..Default::default()
-            })),
-            ..Default::default()
-        };
 
         RootSchema {
             schema: root,
-            definitions: IndexMap::new(),
-            meta_schema: None,
+            ..Default::default()
         }
     }
 }
