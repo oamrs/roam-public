@@ -7,7 +7,8 @@ use schemars::schema::{
 };
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
-use std::collections::{BTreeMap, BTreeSet};
+use indexmap::IndexMap;
+use std::collections::BTreeSet;
 
 #[derive(Debug, Serialize, Deserialize, JsonSchema, PartialEq)]
 pub struct Column {
@@ -64,10 +65,10 @@ impl SchemaModel {
     /// This schema defines an Object where keys are Table Names and values are Objects
     /// representing a row in that table.
     pub fn to_json_schema(&self) -> RootSchema {
-        let mut root_properties = BTreeMap::new();
+        let mut root_properties: IndexMap<String, Schema> = IndexMap::new();
 
         for table in &self.tables {
-            let mut col_properties = BTreeMap::new();
+            let mut col_properties: IndexMap<String, Schema> = IndexMap::new();
             let mut required_cols = BTreeSet::new();
             for col in &table.columns {
                 let sql_upper = col.sql_type.to_uppercase();
@@ -143,7 +144,7 @@ impl SchemaModel {
 
         RootSchema {
             schema: root,
-            definitions: BTreeMap::new(),
+            definitions: IndexMap::new(),
             meta_schema: None,
         }
     }
