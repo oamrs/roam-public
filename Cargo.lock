@@ -625,7 +625,6 @@ dependencies = [
  "anyhow",
  "async-trait",
  "chrono",
- "indexmap 1.9.3",
  "once_cell",
  "prost",
  "regex",

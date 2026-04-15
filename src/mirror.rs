@@ -2,9 +2,7 @@ use anyhow::Result;
 use regex::Regex;
 use rusqlite::Connection;
 use rusqlite::OptionalExtension;
-use schemars::schema::{
-    InstanceType, Metadata, ObjectValidation, RootSchema, Schema, SchemaObject, SingleOrVec,
-};
+use schemars::schema::{InstanceType, Metadata, RootSchema, Schema, SchemaObject, SingleOrVec};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeSet;
