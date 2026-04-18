@@ -600,10 +600,17 @@ fn sqlite_introspects_unique_indexes() {
     drop(conn);
 
     let schema = oam::introspect_sqlite_path(&path).expect("introspect");
-    let table = schema.tables.iter().find(|t| t.name == "accounts").expect("accounts table");
+    let table = schema
+        .tables
+        .iter()
+        .find(|t| t.name == "accounts")
+        .expect("accounts table");
 
     assert!(
-        table.unique_indexes.iter().any(|u| u.columns == vec!["email".to_string()]),
+        table
+            .unique_indexes
+            .iter()
+            .any(|u| u.columns == vec!["email".to_string()]),
         "expected a UniqueIndex on accounts.email, got: {:?}",
         table.unique_indexes
     );
@@ -626,12 +633,17 @@ fn sqlite_introspects_multi_column_unique_index() {
     drop(conn);
 
     let schema = oam::introspect_sqlite_path(&path).expect("introspect");
-    let table = schema.tables.iter().find(|t| t.name == "memberships").expect("memberships table");
+    let table = schema
+        .tables
+        .iter()
+        .find(|t| t.name == "memberships")
+        .expect("memberships table");
 
     assert!(
-        table.unique_indexes.iter().any(|u| {
-            u.columns == vec!["user_id".to_string(), "org_id".to_string()]
-        }),
+        table
+            .unique_indexes
+            .iter()
+            .any(|u| { u.columns == vec!["user_id".to_string(), "org_id".to_string()] }),
         "expected composite UniqueIndex on memberships(user_id, org_id), got: {:?}",
         table.unique_indexes
     );
@@ -643,22 +655,30 @@ fn sqlite_unique_index_excludes_pk() {
     let path = tmp.path().to_str().unwrap().to_string();
 
     let conn = Connection::open(&path).expect("open tmp db");
-    conn.execute_batch(
-        "CREATE TABLE items (id INTEGER PRIMARY KEY, code TEXT NOT NULL UNIQUE);",
-    )
-    .expect("create table");
+    conn.execute_batch("CREATE TABLE items (id INTEGER PRIMARY KEY, code TEXT NOT NULL UNIQUE);")
+        .expect("create table");
     drop(conn);
 
     let schema = oam::introspect_sqlite_path(&path).expect("introspect");
-    let table = schema.tables.iter().find(|t| t.name == "items").expect("items table");
+    let table = schema
+        .tables
+        .iter()
+        .find(|t| t.name == "items")
+        .expect("items table");
 
     assert!(
-        !table.unique_indexes.iter().any(|u| u.columns.contains(&"id".to_string())),
+        !table
+            .unique_indexes
+            .iter()
+            .any(|u| u.columns.contains(&"id".to_string())),
         "PK column 'id' must not appear in unique_indexes, got: {:?}",
         table.unique_indexes
     );
     assert!(
-        table.unique_indexes.iter().any(|u| u.columns == vec!["code".to_string()]),
+        table
+            .unique_indexes
+            .iter()
+            .any(|u| u.columns == vec!["code".to_string()]),
         "expected UniqueIndex on items.code, got: {:?}",
         table.unique_indexes
     );
@@ -672,8 +692,11 @@ fn json_schema_sets_additional_properties_false() {
     let path = tmp.path().to_str().unwrap().to_string();
 
     let conn = Connection::open(&path).expect("open tmp db");
-    conn.execute("CREATE TABLE things (id INTEGER PRIMARY KEY, name TEXT NOT NULL)", [])
-        .expect("create table");
+    conn.execute(
+        "CREATE TABLE things (id INTEGER PRIMARY KEY, name TEXT NOT NULL)",
+        [],
+    )
+    .expect("create table");
     drop(conn);
 
     let schema = oam::introspect_sqlite_path(&path).expect("introspect");
@@ -712,8 +735,11 @@ fn json_schema_pk_column_description_includes_insert_hint() {
     let path = tmp.path().to_str().unwrap().to_string();
 
     let conn = Connection::open(&path).expect("open tmp db");
-    conn.execute("CREATE TABLE widgets (id INTEGER PRIMARY KEY, label TEXT NOT NULL)", [])
-        .expect("create table");
+    conn.execute(
+        "CREATE TABLE widgets (id INTEGER PRIMARY KEY, label TEXT NOT NULL)",
+        [],
+    )
+    .expect("create table");
     drop(conn);
 
     let schema = oam::introspect_sqlite_path(&path).expect("introspect");
@@ -756,8 +782,11 @@ fn json_schema_unique_column_description_includes_unique() {
     let path = tmp.path().to_str().unwrap().to_string();
 
     let conn = Connection::open(&path).expect("open tmp db");
-    conn.execute("CREATE TABLE users (id INTEGER PRIMARY KEY, email TEXT NOT NULL UNIQUE)", [])
-        .expect("create table");
+    conn.execute(
+        "CREATE TABLE users (id INTEGER PRIMARY KEY, email TEXT NOT NULL UNIQUE)",
+        [],
+    )
+    .expect("create table");
     drop(conn);
 
     let schema = oam::introspect_sqlite_path(&path).expect("introspect");
