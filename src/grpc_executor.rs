@@ -132,6 +132,9 @@ impl ProtoAgentService for GrpcAgentServiceImpl {
 
         self.sessions.insert(session.clone()).await;
 
+        let _ = get_event_bus()
+            .dispatch_generic(&DomainEvent::session_registered(session.session_id.clone()));
+
         Ok(Response::new(ConnectResponse {
             success: true,
             session_id: session.session_id,

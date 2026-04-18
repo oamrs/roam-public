@@ -92,6 +92,11 @@ pub enum Event {
         action: String,
         timestamp: String,
     },
+    #[serde(rename = "SessionRegistered")]
+    SessionRegistered {
+        session_id: String,
+        timestamp: String,
+    },
 }
 
 impl Event {
@@ -220,6 +225,13 @@ impl Event {
         }
     }
 
+    pub fn session_registered(session_id: String) -> Self {
+        Event::SessionRegistered {
+            session_id,
+            timestamp: chrono::Utc::now().to_rfc3339(),
+        }
+    }
+
     pub fn event_type(&self) -> &str {
         match self {
             Event::StatusChange { .. } => "StatusChange",
@@ -230,6 +242,7 @@ impl Event {
             Event::QueryExecutionError { .. } => "QueryExecutionError",
             Event::RuntimeAugmentationAuditRecorded { .. } => "RuntimeAugmentationAuditRecorded",
             Event::ModelChanged { .. } => "ModelChanged",
+            Event::SessionRegistered { .. } => "SessionRegistered",
         }
     }
 
@@ -351,6 +364,13 @@ impl Event {
                 map.insert("entity_type".to_string(), entity_type.clone());
                 map.insert("entity_id".to_string(), entity_id.clone());
                 map.insert("action".to_string(), action.clone());
+                map.insert("timestamp".to_string(), timestamp.clone());
+            }
+            Event::SessionRegistered {
+                session_id,
+                timestamp,
+            } => {
+                map.insert("session_id".to_string(), session_id.clone());
                 map.insert("timestamp".to_string(), timestamp.clone());
             }
         }

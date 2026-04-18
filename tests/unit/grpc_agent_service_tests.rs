@@ -3,6 +3,7 @@ use oam::interceptor::{get_event_bus, Event as DomainEvent};
 use roam_proto::v1::agent::{
     agent_service_server::AgentService, ConnectRequest, EventStreamRequest, SchemaMode,
 };
+use serial_test::serial;
 use tokio::time::{timeout, Duration};
 use tokio_stream::StreamExt;
 use tonic::Request;
@@ -91,4 +92,36 @@ async fn grpc_agent_stream_events_returns_session_filtered_events() {
 
     assert_eq!(next_event.r#type, "QueryValidationFailed");
     assert!(!next_event.payload.is_empty());
+}
+
+#[serial(event_bus)]
+#[tokio::test]
+async fn test_register_dispatches_session_registered_event() {
+    let event_bus = get_event_bus();
+    let _ = event_bus.clear();
+
+    let service = GrpcAgentServiceImpl::default();
+
+    let response = service
+        .register(Request::new(ConnectRequest {
+            agent_id: "memory-agent".to_string(),
+            version: "1.0.0".to_string(),
+            mode: SchemaMode::DataFirst.into(),
+        }))
+        .await
+        .expect("register")
+        .into_inner();
+
+    let events = event_bus
+        .events_by_type("SessionRegistered")
+        .expect("get events");
+
+    assert_eq!(events.len(), 1, "exactly one SessionRegistered event");
+
+    let metadata = events[0].metadata();
+    assert_eq!(
+        metadata.get("session_id"),
+        Some(&response.session_id),
+        "session_id in event metadata matches response"
+    );
 }
