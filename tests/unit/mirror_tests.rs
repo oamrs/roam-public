@@ -581,3 +581,238 @@ fn json_schema_reflects_enum_constraints() {
         "json schema should reflect the enum constraint"
     );
 }
+
+// ── Phase 1–2 TDD: UniqueIndex introspection ─────────────────────────────────
+
+#[test]
+fn sqlite_introspects_unique_indexes() {
+    let tmp = NamedTempFile::new().expect("create tmp file");
+    let path = tmp.path().to_str().unwrap().to_string();
+
+    let conn = Connection::open(&path).expect("open tmp db");
+    conn.execute_batch(
+        "CREATE TABLE accounts (
+            id    INTEGER PRIMARY KEY,
+            email TEXT NOT NULL UNIQUE
+        );",
+    )
+    .expect("create table");
+    drop(conn);
+
+    let schema = oam::introspect_sqlite_path(&path).expect("introspect");
+    let table = schema.tables.iter().find(|t| t.name == "accounts").expect("accounts table");
+
+    assert!(
+        table.unique_indexes.iter().any(|u| u.columns == vec!["email".to_string()]),
+        "expected a UniqueIndex on accounts.email, got: {:?}",
+        table.unique_indexes
+    );
+}
+
+#[test]
+fn sqlite_introspects_multi_column_unique_index() {
+    let tmp = NamedTempFile::new().expect("create tmp file");
+    let path = tmp.path().to_str().unwrap().to_string();
+
+    let conn = Connection::open(&path).expect("open tmp db");
+    conn.execute_batch(
+        "CREATE TABLE memberships (
+            user_id INTEGER NOT NULL,
+            org_id  INTEGER NOT NULL
+        );
+        CREATE UNIQUE INDEX uq_memberships ON memberships (user_id, org_id);",
+    )
+    .expect("create tables");
+    drop(conn);
+
+    let schema = oam::introspect_sqlite_path(&path).expect("introspect");
+    let table = schema.tables.iter().find(|t| t.name == "memberships").expect("memberships table");
+
+    assert!(
+        table.unique_indexes.iter().any(|u| {
+            u.columns == vec!["user_id".to_string(), "org_id".to_string()]
+        }),
+        "expected composite UniqueIndex on memberships(user_id, org_id), got: {:?}",
+        table.unique_indexes
+    );
+}
+
+#[test]
+fn sqlite_unique_index_excludes_pk() {
+    let tmp = NamedTempFile::new().expect("create tmp file");
+    let path = tmp.path().to_str().unwrap().to_string();
+
+    let conn = Connection::open(&path).expect("open tmp db");
+    conn.execute_batch(
+        "CREATE TABLE items (id INTEGER PRIMARY KEY, code TEXT NOT NULL UNIQUE);",
+    )
+    .expect("create table");
+    drop(conn);
+
+    let schema = oam::introspect_sqlite_path(&path).expect("introspect");
+    let table = schema.tables.iter().find(|t| t.name == "items").expect("items table");
+
+    assert!(
+        !table.unique_indexes.iter().any(|u| u.columns.contains(&"id".to_string())),
+        "PK column 'id' must not appear in unique_indexes, got: {:?}",
+        table.unique_indexes
+    );
+    assert!(
+        table.unique_indexes.iter().any(|u| u.columns == vec!["code".to_string()]),
+        "expected UniqueIndex on items.code, got: {:?}",
+        table.unique_indexes
+    );
+}
+
+// ── Phase 3 TDD: JSON schema enrichment ──────────────────────────────────────
+
+#[test]
+fn json_schema_sets_additional_properties_false() {
+    let tmp = NamedTempFile::new().expect("create tmp file");
+    let path = tmp.path().to_str().unwrap().to_string();
+
+    let conn = Connection::open(&path).expect("open tmp db");
+    conn.execute("CREATE TABLE things (id INTEGER PRIMARY KEY, name TEXT NOT NULL)", [])
+        .expect("create table");
+    drop(conn);
+
+    let schema = oam::introspect_sqlite_path(&path).expect("introspect");
+    let json_schema = schema.to_json_schema();
+
+    let table_schema = json_schema
+        .schema
+        .object
+        .as_ref()
+        .and_then(|obj| obj.properties.get("things"))
+        .expect("things table in schema");
+
+    let table_obj = match table_schema {
+        schemars::schema::Schema::Object(o) => o,
+        _ => panic!("expected schema object for things table"),
+    };
+
+    let additional = table_obj
+        .object
+        .as_ref()
+        .expect("things table has object validation")
+        .additional_properties
+        .as_ref()
+        .expect("additionalProperties must be set");
+
+    assert!(
+        matches!(additional.as_ref(), schemars::schema::Schema::Bool(false)),
+        "expected additionalProperties: false, got: {:?}",
+        additional
+    );
+}
+
+#[test]
+fn json_schema_pk_column_description_includes_insert_hint() {
+    let tmp = NamedTempFile::new().expect("create tmp file");
+    let path = tmp.path().to_str().unwrap().to_string();
+
+    let conn = Connection::open(&path).expect("open tmp db");
+    conn.execute("CREATE TABLE widgets (id INTEGER PRIMARY KEY, label TEXT NOT NULL)", [])
+        .expect("create table");
+    drop(conn);
+
+    let schema = oam::introspect_sqlite_path(&path).expect("introspect");
+    let json_str = serde_json::to_string(&schema.to_json_schema()).expect("to json");
+
+    assert!(
+        json_str.contains("omit on INSERT"),
+        "PK column description must contain 'omit on INSERT', got schema: {}",
+        json_str
+    );
+}
+
+#[test]
+fn json_schema_fk_column_description_includes_reference() {
+    let tmp = NamedTempFile::new().expect("create tmp file");
+    let path = tmp.path().to_str().unwrap().to_string();
+
+    let conn = Connection::open(&path).expect("open tmp db");
+    conn.execute_batch(
+        "CREATE TABLE users (id INTEGER PRIMARY KEY, name TEXT NOT NULL);
+         CREATE TABLE posts (id INTEGER PRIMARY KEY, user_id INTEGER NOT NULL,
+             FOREIGN KEY (user_id) REFERENCES users(id));",
+    )
+    .expect("create tables");
+    drop(conn);
+
+    let schema = oam::introspect_sqlite_path(&path).expect("introspect");
+    let json_str = serde_json::to_string(&schema.to_json_schema()).expect("to json");
+
+    assert!(
+        json_str.contains("Foreign Key \u{2192}"),
+        "FK column description must contain 'Foreign Key →', got schema: {}",
+        json_str
+    );
+}
+
+#[test]
+fn json_schema_unique_column_description_includes_unique() {
+    let tmp = NamedTempFile::new().expect("create tmp file");
+    let path = tmp.path().to_str().unwrap().to_string();
+
+    let conn = Connection::open(&path).expect("open tmp db");
+    conn.execute("CREATE TABLE users (id INTEGER PRIMARY KEY, email TEXT NOT NULL UNIQUE)", [])
+        .expect("create table");
+    drop(conn);
+
+    let schema = oam::introspect_sqlite_path(&path).expect("introspect");
+    let json_str = serde_json::to_string(&schema.to_json_schema()).expect("to json");
+
+    assert!(
+        json_str.contains("UNIQUE"),
+        "unique column description must contain 'UNIQUE', got schema: {}",
+        json_str
+    );
+}
+
+#[test]
+fn json_schema_composite_fk_in_table_description() {
+    let tmp = NamedTempFile::new().expect("create tmp file");
+    let path = tmp.path().to_str().unwrap().to_string();
+
+    let conn = Connection::open(&path).expect("open tmp db");
+    conn.execute_batch(
+        "CREATE TABLE parents (p1 INTEGER NOT NULL, p2 INTEGER NOT NULL, PRIMARY KEY (p1, p2));
+         CREATE TABLE children (id INTEGER PRIMARY KEY, a INTEGER NOT NULL, b INTEGER NOT NULL,
+             FOREIGN KEY (a, b) REFERENCES parents(p1, p2));",
+    )
+    .expect("create tables");
+    drop(conn);
+
+    let schema = oam::introspect_sqlite_path(&path).expect("introspect");
+    let json_str = serde_json::to_string(&schema.to_json_schema()).expect("to json");
+
+    assert!(
+        json_str.contains("parents"),
+        "table description must include composite FK reference to 'parents', got schema: {}",
+        json_str
+    );
+}
+
+#[test]
+fn json_schema_multi_unique_in_table_description() {
+    let tmp = NamedTempFile::new().expect("create tmp file");
+    let path = tmp.path().to_str().unwrap().to_string();
+
+    let conn = Connection::open(&path).expect("open tmp db");
+    conn.execute_batch(
+        "CREATE TABLE memberships (user_id INTEGER NOT NULL, org_id INTEGER NOT NULL);
+         CREATE UNIQUE INDEX uq_memberships ON memberships (user_id, org_id);",
+    )
+    .expect("create tables");
+    drop(conn);
+
+    let schema = oam::introspect_sqlite_path(&path).expect("introspect");
+    let json_str = serde_json::to_string(&schema.to_json_schema()).expect("to json");
+
+    assert!(
+        json_str.contains("UNIQUE"),
+        "table description must include multi-column UNIQUE annotation, got schema: {}",
+        json_str
+    );
+}

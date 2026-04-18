@@ -2,10 +2,10 @@ use anyhow::Result;
 use regex::Regex;
 use rusqlite::Connection;
 use rusqlite::OptionalExtension;
-use schemars::schema::{InstanceType, Metadata, RootSchema, Schema, SchemaObject, SingleOrVec};
+use schemars::schema::{InstanceType, Metadata, ObjectValidation, RootSchema, Schema, SchemaObject, SingleOrVec};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
-use std::collections::BTreeSet;
+use std::collections::{BTreeSet, HashMap, HashSet};
 
 #[derive(Debug, Serialize, Deserialize, JsonSchema, PartialEq)]
 pub struct Column {
@@ -17,11 +17,20 @@ pub struct Column {
 }
 
 #[derive(Debug, Serialize, Deserialize, JsonSchema, PartialEq)]
+pub struct UniqueIndex {
+    /// Name of the unique index as recorded in the database
+    pub name: String,
+    /// Ordered list of column names covered by this index
+    pub columns: Vec<String>,
+}
+
+#[derive(Debug, Serialize, Deserialize, JsonSchema, PartialEq)]
 pub struct Table {
     pub name: String,
     pub columns: Vec<Column>,
     pub foreign_keys: Vec<ForeignKey>,
     pub composite_foreign_keys: Vec<CompositeForeignKey>,
+    pub unique_indexes: Vec<UniqueIndex>,
 }
 
 #[derive(Debug, Serialize, Deserialize, JsonSchema, PartialEq)]
@@ -68,14 +77,51 @@ impl SchemaModel {
         };
 
         for table in &self.tables {
+            // Build lookup: column name → FK
+            let fk_map: HashMap<&str, &ForeignKey> =
+                table.foreign_keys.iter().map(|fk| (fk.column.as_str(), fk)).collect();
+
+            // Build lookup: single-column unique index columns
+            let single_unique_set: HashSet<&str> = table
+                .unique_indexes
+                .iter()
+                .filter(|u| u.columns.len() == 1)
+                .map(|u| u.columns[0].as_str())
+                .collect();
+
+            // Build table description
+            let mut table_desc = format!("Table: {}", table.name);
+            for u in &table.unique_indexes {
+                if u.columns.len() > 1 {
+                    table_desc.push_str(&format!(
+                        " | UNIQUE ({}) — these columns together must be unique",
+                        u.columns.join(", ")
+                    ));
+                }
+            }
+            for cfk in &table.composite_foreign_keys {
+                table_desc.push_str(&format!(
+                    " | ({}) → {}({})",
+                    cfk.columns.join(", "),
+                    cfk.referenced_table,
+                    cfk.referenced_columns.join(", ")
+                ));
+            }
+
             let mut table_schema = SchemaObject {
                 instance_type: Some(SingleOrVec::Single(Box::new(InstanceType::Object))),
                 metadata: Some(Box::new(Metadata {
-                    description: Some(format!("Table: {}", table.name)),
+                    description: Some(table_desc),
                     ..Default::default()
                 })),
                 ..Default::default()
             };
+
+            // Set additionalProperties: false to prevent LLM hallucinating extra fields
+            table_schema
+                .object
+                .get_or_insert_with(|| Box::new(ObjectValidation::default()))
+                .additional_properties = Some(Box::new(Schema::Bool(false)));
 
             let mut required_cols = BTreeSet::new();
 
@@ -109,29 +155,49 @@ impl SchemaModel {
                     );
                 }
 
+                // Build enriched column description
                 let mut desc = format!("SQL Type: {}", col.sql_type);
                 if col.primary_key {
-                    desc.push_str(" (Primary Key)");
+                    desc.push_str(" | Primary Key — auto-generated; omit on INSERT");
                 }
+                if let Some(fk) = fk_map.get(col.name.as_str()) {
+                    desc.push_str(&format!(
+                        " | Foreign Key → {}({})",
+                        fk.referenced_table, fk.referenced_column
+                    ));
+                    if let Some(ref action) = fk.on_delete {
+                        desc.push_str(&format!(", ON DELETE {}", action));
+                    }
+                    if let Some(ref action) = fk.on_update {
+                        desc.push_str(&format!(", ON UPDATE {}", action));
+                    }
+                }
+                if single_unique_set.contains(col.name.as_str()) {
+                    desc.push_str(" | UNIQUE — value must be unique across all rows");
+                }
+                if col.enum_values.is_some() {
+                    desc.push_str(" | Constrained by CHECK IN (enum values)");
+                }
+
                 schema_obj.metadata = Some(Box::new(Metadata {
                     description: Some(desc),
                     ..Default::default()
                 }));
 
-                if !col.nullable {
+                if !col.nullable && !col.primary_key {
                     required_cols.insert(col.name.clone());
                 }
 
                 table_schema
                     .object
-                    .get_or_insert_with(Default::default)
+                    .get_or_insert_with(|| Box::new(ObjectValidation::default()))
                     .properties
                     .insert(col.name.clone(), Schema::Object(schema_obj));
             }
 
             table_schema
                 .object
-                .get_or_insert_with(Default::default)
+                .get_or_insert_with(|| Box::new(ObjectValidation::default()))
                 .required = required_cols;
 
             root.object
@@ -304,11 +370,52 @@ pub fn introspect_sqlite_path(path: &str) -> Result<SchemaModel> {
             }
         }
 
+        // Extract unique indexes (exclude PK-generated indexes and partial indexes)
+        let mut idx_list_stmt =
+            conn.prepare(&format!("PRAGMA index_list('{}')", t))?;
+        // Columns: seq, name, unique, origin, partial
+        let index_rows = idx_list_stmt
+            .query_map([], |row| {
+                let name: String = row.get(1)?;
+                let unique: i32 = row.get(2)?;
+                let origin: String = row.get(3)?;
+                let partial: i32 = row.get(4)?;
+                Ok((name, unique, origin, partial))
+            })?
+            .collect::<Result<Vec<_>, rusqlite::Error>>()?;
+
+        let mut unique_indexes: Vec<UniqueIndex> = Vec::new();
+        for (idx_name, unique, origin, partial) in index_rows {
+            // Only keep explicit unique indexes; skip PK-origin and partial indexes
+            if unique != 1 || origin == "pk" || partial != 0 {
+                continue;
+            }
+            let mut idx_info_stmt =
+                conn.prepare(&format!("PRAGMA index_info('{}')", idx_name))?;
+            // Columns: seqno, cid, name
+            let mut col_rows = idx_info_stmt
+                .query_map([], |row| {
+                    let seqno: i32 = row.get(0)?;
+                    let col_name: String = row.get(2)?;
+                    Ok((seqno, col_name))
+                })?
+                .collect::<Result<Vec<_>, rusqlite::Error>>()?;
+            col_rows.sort_by_key(|r| r.0);
+            let columns: Vec<String> = col_rows.into_iter().map(|r| r.1).collect();
+            if !columns.is_empty() {
+                unique_indexes.push(UniqueIndex {
+                    name: idx_name,
+                    columns,
+                });
+            }
+        }
+
         tables.push(Table {
             name: t,
             columns: cols,
             foreign_keys: single_fks,
             composite_foreign_keys: composite_fks,
+            unique_indexes,
         });
     }
 

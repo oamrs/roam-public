@@ -107,6 +107,46 @@ pub struct Organization {
 let schema_json = serde_json::to_value(Organization::llm_schema()).unwrap();
 ```
 
+### Constraint-to-JSON Schema Mapping
+
+`oam::mirror::to_json_schema()` translates SQLite database constraints directly into restrictive JSON Schema rules so LLM tool calls respect the data model at the schema level.
+
+**What gets emitted**:
+
+| Constraint | JSON Schema effect |
+|---|---|
+| Primary Key | Column description annotated `"Primary Key — auto-generated; omit on INSERT"`; column excluded from `required` |
+| Foreign Key (`REFERENCES`) | Column description annotated `"Foreign Key → table(col)[, ON DELETE …]"` |
+| `UNIQUE` index | Column description annotated `"UNIQUE — value must be unique across all rows"` |
+| Multi-column `UNIQUE` | Table-level description lists composite key, e.g. `"UNIQUE(col_a, col_b)"` |
+| Composite FK | Table-level description lists composite reference |
+| `CHECK(col IN (…))` | Property emits `"enum": [...]` values |
+| — | `"additionalProperties": false` on every table schema |
+
+**Inspected types**:
+
+```rust
+// `UniqueIndex` is exported from `oam` — available from `oam::mirror`
+pub struct UniqueIndex {
+    pub name: String,
+    pub columns: Vec<String>,
+}
+
+pub struct Table {
+    // ...existing fields...
+    pub unique_indexes: Vec<UniqueIndex>,
+}
+```
+
+```rust
+use oam::mirror::introspect_sqlite_path;
+
+let schema = introspect_sqlite_path("my_db.sqlite")?;
+let json = schema.to_json_schema();
+// Each table entry already has additionalProperties: false,
+// FK/PK/UNIQUE descriptions, and enum constraints baked in.
+```
+
 ## Running Tests
 
 ```bash
