@@ -108,14 +108,26 @@ fn column_instance_type(sql_type: &str) -> InstanceType {
     }
 }
 
+/// Returns true when the column is a SQLite rowid alias (sole INTEGER PRIMARY KEY).
+/// Only rowid aliases are auto-generated; other PKs (TEXT, composite, etc.) must be
+/// supplied by the caller.
+fn is_rowid_alias(col: &Column, pk_count: usize) -> bool {
+    col.primary_key && pk_count == 1 && col.sql_type.to_uppercase() == "INTEGER"
+}
+
 fn build_column_description(
     col: &Column,
     fk_map: &HashMap<&str, &ForeignKey>,
     single_unique_set: &HashSet<&str>,
+    rowid_alias: bool,
 ) -> String {
     let mut desc = format!("SQL Type: {}", col.sql_type);
     if col.primary_key {
-        desc.push_str(" | Primary Key — auto-generated; omit on INSERT");
+        if rowid_alias {
+            desc.push_str(" | Primary Key — auto-generated; omit on INSERT");
+        } else {
+            desc.push_str(" | Primary Key");
+        }
     }
     if let Some(fk) = fk_map.get(col.name.as_str()) {
         desc.push_str(&format!(
@@ -142,6 +154,7 @@ fn build_column_schema_obj(
     col: &Column,
     fk_map: &HashMap<&str, &ForeignKey>,
     single_unique_set: &HashSet<&str>,
+    rowid_alias: bool,
 ) -> SchemaObject {
     let instance_type = column_instance_type(&col.sql_type);
     let mut schema_obj = SchemaObject {
@@ -156,7 +169,7 @@ fn build_column_schema_obj(
                 .collect(),
         );
     }
-    let desc = build_column_description(col, fk_map, single_unique_set);
+    let desc = build_column_description(col, fk_map, single_unique_set, rowid_alias);
     schema_obj.metadata = Some(Box::new(Metadata {
         description: Some(desc),
         ..Default::default()
@@ -176,6 +189,8 @@ fn build_table_json_schema(table: &Table) -> (String, Schema) {
         .filter(|u| u.columns.len() == 1)
         .map(|u| u.columns[0].as_str())
         .collect();
+
+    let pk_count = table.columns.iter().filter(|c| c.primary_key).count();
 
     let mut table_desc = format!("Table: {}", table.name);
     for u in &table.unique_indexes {
@@ -210,8 +225,11 @@ fn build_table_json_schema(table: &Table) -> (String, Schema) {
 
     let mut required_cols = BTreeSet::new();
     for col in &table.columns {
-        let schema_obj = build_column_schema_obj(col, &fk_map, &single_unique_set);
-        if !col.nullable && !col.primary_key {
+        let rowid = is_rowid_alias(col, pk_count);
+        let schema_obj = build_column_schema_obj(col, &fk_map, &single_unique_set, rowid);
+        // Rowid-alias PKs are auto-generated and should not be in required.
+        // All other non-nullable columns (including non-rowid PKs) must be provided.
+        if !col.nullable && !rowid {
             required_cols.insert(col.name.clone());
         }
         table_schema
@@ -248,7 +266,8 @@ fn detect_enum_values(sql_text: &str, col_name: &str) -> Option<Vec<String>> {
 }
 
 fn introspect_columns(conn: &Connection, table: &str) -> Result<Vec<Column>> {
-    let mut cols_stmt = conn.prepare(&format!("PRAGMA table_info('{}')", table))?;
+    let mut cols_stmt =
+        conn.prepare(&format!("PRAGMA table_info({})", sqlite_quote_ident(table)))?;
     let cols = cols_stmt
         .query_map([], |row| {
             let name: String = row.get(1)?;
@@ -298,7 +317,10 @@ fn introspect_foreign_keys(
     table: &str,
 ) -> Result<(Vec<ForeignKey>, Vec<CompositeForeignKey>)> {
     use std::collections::BTreeMap;
-    let mut fk_stmt = conn.prepare(&format!("PRAGMA foreign_key_list('{}')", table))?;
+    let mut fk_stmt = conn.prepare(&format!(
+        "PRAGMA foreign_key_list({})",
+        sqlite_quote_ident(table)
+    ))?;
     let fk_rows = fk_stmt
         .query_map([], |row| {
             let id: i64 = row.get(0)?;
@@ -368,8 +390,15 @@ fn introspect_foreign_keys(
     Ok((single_fks, composite_fks))
 }
 
+/// Wraps a SQLite identifier in double-quotes, escaping any embedded double-quotes.
+/// Use this for all PRAGMA identifier arguments to handle names with special characters.
+fn sqlite_quote_ident(name: &str) -> String {
+    format!("\"{}\"", name.replace('"', "\"\""))
+}
+
 fn introspect_unique_indexes(conn: &Connection, table: &str) -> Result<Vec<UniqueIndex>> {
-    let mut idx_list_stmt = conn.prepare(&format!("PRAGMA index_list('{}')", table))?;
+    let mut idx_list_stmt =
+        conn.prepare(&format!("PRAGMA index_list({})", sqlite_quote_ident(table)))?;
     let index_rows = idx_list_stmt
         .query_map([], |row| {
             let name: String = row.get(1)?;
