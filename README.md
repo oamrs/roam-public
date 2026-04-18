@@ -1,270 +1,132 @@
-# roam
+# oam
 
-The **roam** crate provides OAM (Object Agent Mapper) core functionality for distributed query execution, schema introspection, and event-driven architecture.
+The **OAM (Object Agent Mapping)** framework for Rust — distributed query execution, schema introspection, event-driven architecture, and LLM agent integration.
 
-## Core Modules
+## Overview
 
-### roam::execution_engine
+`oam` is the core runtime library for building systems where AI agents interact with relational data. It provides:
 
-High-throughput asynchronous execution engine for managing concurrent queries:
+- Multiple query backends (local SQLite, TCP JSON-RPC, gRPC) behind a single `Mapper` trait
+- High-throughput async execution engine with priority queues and result tracking
+- Database schema introspection with JSON Schema output for LLM tool calling
+- Event bus for model-change propagation across the application
+- Built-in gRPC server (via Tonic) for polyglot client support
 
-- **ExecutionEngine** - Orchestrates concurrent query execution with integrated connection pooling and JoinSet task management
-- **QueryRequest** - Encapsulates requests with priority, unique ID, and timing metadata
-- **QueryPriority** - Four-level priority system (Low, Normal, High, Critical)
-- **ExecutionMetrics** - Advanced metrics tracking with latency histograms and per-database statistics
-- **ConnectionPool** - Async connection pool management for SQLite with configurable limits
-- **PoolStats** - Pool statistics including available/checked-out connection counts
-- **DatabaseStats** - Per-database execution statistics and latency tracking
-- **QueryResult** - Result container with status, output, error, and expiration information
-- **ResultStatus** - Enum tracking pending/completed/failed/cancelled states
-- **CancellationToken** - Task cancellation mechanism with state tracking
+## Quick Start
 
-Features:
-- Configurable concurrency limits: `ExecutionEngine::new(db_path, max_concurrent_queries)?`
-- Unique request IDs for result tracking via UUID
-- Priority-based request ordering (Critical > High > Normal > Low)
-- Lock-free metrics: total queries, successful/failed counts, queue depth, active tasks
-- Advanced metrics: success rates, latency percentiles (p95, p99), per-database stats
-- Async connection pooling with semaphore-based concurrency control
-- Connection acquisition with automatic release on drop
-- Concurrent task execution via tokio::JoinSet with automatic metrics updates
-- Spawn queries asynchronously with `engine.spawn_query(request)` for high-throughput execution
-- Real-time latency tracking and per-database statistics collection
-- Automatic database-specific performance monitoring
-- Result retrieval by request ID: `engine.get_result(request_id).await`
-- Blocking result retrieval with timeout: `engine.wait_for_result(request_id, 5000).await`
-- Result status queries: `engine.result_status(request_id).await`
-- Task cancellation: `engine.cancel_task(request_id).await` prevents completed tasks
-- Cancellation token creation: `engine.create_cancellation_token(request_id).await`
-- Cancellation status checks: `engine.is_task_cancelled(request_id).await`
-- Automatic result cleanup for cancelled tasks
-- Result expiration tracking: Automatic TTL (30ms default) on all results
-- Expiration checks: `engine.is_result_expired(request_id).await`
-- Garbage collection: `engine.garbage_collect_expired_results().await` returns count
-- Result storage metrics: `engine.result_count().await` and `engine.garbage_collected_count().await`
+```toml
+[dependencies]
+oam = "0.1"
+tokio = { version = "1", features = ["full"] }
+```
 
-### roam::executor
+### Local SQLite query
 
-High-level query execution and schema services with multiple backend support:
+```rust
+use oam::mapper::{LocalMapper, Mapper, ExecuteQueryRequest};
 
-- **QueryService** - Execute and validate SQL queries with parameter binding
-- **SchemaService** - Introspect database schema and retrieve table metadata
-- **Mapper Pattern** - Pluggable backends: LocalMapper (direct), TcpMapper (JSON-RPC), GrpcMapper (gRPC)
+let mapper = LocalMapper::new("my_db.sqlite")?;
+let response = mapper.execute_query(ExecuteQueryRequest {
+    db_identifier: "my_db".into(),
+    query: "SELECT id, name FROM organizations LIMIT 10".into(),
+    limit: 10,
+    timeout_seconds: 5,
+}).await?;
+```
 
-### roam::grpc_executor
+### Remote gRPC query
 
-gRPC server implementation using Tonic for distributed query access:
+```rust
+use oam::mapper::{GrpcMapper, Mapper, ExecuteQueryRequest};
 
-- **GrpcExecutor** - Standalone server wrapping QueryService and SchemaService
-- **gRPC Services** - Proto-defined API for polyglot clients (Python, Go, .NET, etc.)
-- **Async Architecture** - Tokio-based async/await throughout
+let mapper = GrpcMapper::new("http://localhost:50051").await?;
+let response = mapper.execute_query(ExecuteQueryRequest { .. }).await?;
+```
 
-Features:
-- Start server on any address: `executor.start_server("127.0.0.1:50051").await?`
-- Full QueryService RPC: `execute_query()`, `validate_query()`
-- Full SchemaService RPC: `get_schema()`, `get_table()`
-- Graceful shutdown support
+### Start a gRPC server
 
-### roam::mapper
+```rust
+use oam::grpc_executor::GrpcExecutor;
 
-Composable backend abstraction for distributed queries:
+let executor = GrpcExecutor::new("my_db.sqlite")?;
+executor.start_server("127.0.0.1:50051").await?;
+```
 
-**Trait-based design:**
+## Modules
+
+| Module | Description |
+|--------|-------------|
+| `oam::execution_engine` | Async execution engine with priority queues, metrics, and result tracking |
+| `oam::executor` | `QueryService` and `SchemaService` for executing and validating SQL |
+| `oam::grpc_executor` | Standalone gRPC server wrapping executor services |
+| `oam::mapper` | `Mapper` trait + `LocalMapper`, `TcpMapper`, `GrpcMapper` implementations |
+| `oam::mirror` | SeaORM entity introspection → JSON Schema for LLM tool definitions |
+| `oam::interceptor` | Global `EventBus` for model-change events |
+| `oam::tcp` | JSON-RPC over TCP server and client |
+| `oam::policy_engine` | RBAC policy evaluation |
+
+## The `Mapper` Trait
+
+All backends share the same interface:
+
 ```rust
 #[async_trait]
 pub trait Mapper: Send + Sync {
-    async fn validate_query(&self, request: ValidateQueryRequest) -> Result<ValidationResponse, String>;
-    async fn execute_query(&self, request: ExecuteQueryRequest) -> Result<ExecuteQueryResponse, String>;
+    async fn validate_query(&self, req: ValidateQueryRequest) -> Result<ValidationResponse, String>;
+    async fn execute_query(&self, req: ExecuteQueryRequest)   -> Result<ExecuteQueryResponse, String>;
 }
 ```
 
-**Implementations:**
+Choose the backend at runtime without changing application logic:
 
-1. **LocalMapper** - Direct database access via embedded SQLite
-   ```rust
-   let mapper = LocalMapper::new("database.db")?;
-   let result = mapper.execute_query(request).await?;
-   ```
-
-2. **TcpMapper** - Remote queries via JSON-RPC over TCP
-   ```rust
-   let mapper = TcpMapper::new(client).await?;
-   let result = mapper.execute_query(request).await?;
-   ```
-
-3. **GrpcMapper** - Remote queries via gRPC with Tonic
-   ```rust
-   let mapper = GrpcMapper::new("http://localhost:50051").await?;
-   let result = mapper.execute_query(request).await?;
-   ```
-
-**Composition Pattern:** Mix and match mappers in your application
 ```rust
 let mapper: Box<dyn Mapper> = match config.backend {
-    Backend::Local => Box::new(LocalMapper::new(db_path)?),
-    Backend::Remote => Box::new(GrpcMapper::new(remote_addr).await?),
+    Backend::Local   => Box::new(LocalMapper::new(db_path)?),
+    Backend::Tcp     => Box::new(TcpMapper::new(client).await?),
+    Backend::Remote  => Box::new(GrpcMapper::new(remote_addr).await?),
 };
 ```
 
-### roam::mirror
+## LLM Schema Generation
 
-SeaORM Entity-to-Tool reflection for database schema introspection:
-
-- **Table & Column Metadata**: Extracts all tables, columns with types, nullability, and constraints
-- **Foreign Key Support**: Detects single-column and composite multi-column foreign keys with cascade actions
-- **Enum Detection**: Extracts enum constraints from CHECK constraints
-- **JSON Schema Generation**: Converts schema to JSON Schema for LLM consumption
-- **Type Mapping**: SQL types ↔ JSON Schema instance types
-
-### roam::interceptor
-
-Event-driven architecture with global event bus:
-
-- **EventBus** - Global event dispatch and subscription system
-- **Event Types** - Extensible enum for different event categories
-- **Subscribers** - Type-based filtering for efficient event handling
-- **ModelChanged Events** - Track entity create/update actions
-
-### roam::tcp
-
-JSON-RPC over TCP implementation for legacy client support:
-
-- **JsonRpcServer** - Standalone server with database path and auth provider configuration
-- **JsonRpcClient** - Client for making JSON-RPC calls
-- **Schema & Query Services** - Same interface as gRPC but over TCP
-
-## Proto Definitions (roam-proto)
-
-gRPC API contracts defined in Protocol Buffers:
-
-### QueryService (v1.query.service.proto)
-
-```protobuf
-service QueryService {
-  rpc ExecuteQuery (ExecuteQueryRequest) returns (ExecuteQueryResponse);
-  rpc ValidateQuery (ValidateQueryRequest) returns (ValidationResponse);
-}
-```
-
-Messages include parameters for database identifier, query string, limit, and timeout.
-
-### SchemaService (v1.schema.service.proto)
-
-```protobuf
-service SchemaService {
-  rpc GetSchema (GetSchemaRequest) returns (GetSchemaResponse);
-  rpc GetTable (GetTableRequest) returns (GetTableResponse);
-}
-```
-
-Enables schema introspection and table metadata retrieval over gRPC.
-
-## Backend Model Integration
-
-All backend domain models can emit events on creation/update:
+Use `oam-schema`'s `LlmSchema` derive together with `oam::mirror` to expose your data models to LLM agents:
 
 ```rust
-#[derive(Clone, Debug, DeriveEntityModel, Eq, LlmSchema, JsonSchema)]
-pub struct Model {
-    #[sea_orm(primary_key)]
+use oam_schema::LlmSchema;
+use schemars::JsonSchema;
+use serde::{Serialize, Deserialize};
+
+#[derive(Serialize, Deserialize, JsonSchema, LlmSchema)]
+pub struct Organization {
     pub id: String,
-    // ... fields
+    pub name: String,
+    pub parent_id: Option<String>,
 }
 
-impl ActiveModel {
-    pub fn after_save_internal(model: &Model, insert: bool) -> Result<(), String> {
-        let event = Event::model_changed(
-            "entity_type".to_string(),
-            model.id.clone(),
-            if insert { "created" } else { "updated" }.to_string(),
-        );
-        get_event_bus().dispatch_generic(&event)
-    }
-}
+// Pass to an OpenAI / Anthropic tool definition
+let schema_json = serde_json::to_value(Organization::llm_schema()).unwrap();
 ```
-
-Benefits:
-- **LlmSchema derive** - Compile-time JSON schema generation
-- **JsonSchema derive** - OpenAPI-compatible schema
-- **After-save hooks** - Automatic event emission for audit trails
-- **Type-safe events** - Structured event dispatch via EventBus
 
 ## Running Tests
 
-### All Tests
 ```bash
-make test
+# All tests
+make test FILTER=roam-public
+
+# Unit tests only
+cd libraries/roam-public && cargo test --test unit
+
+# Integration tests
+cd libraries/roam-public && cargo test --test integration
 ```
 
-### Unit Tests (roam-public)
-```bash
-cd libraries/roam-public
-cargo test --test unit
-```
+## Related Crates
 
-### Integration Tests (roam-public)
-```bash
-cd libraries/roam-public
-cargo test --test integration
-```
+| Crate | Description |
+|-------|-------------|
+| [`oam-proto`](https://crates.io/crates/oam-proto) | Shared gRPC/protobuf definitions |
+| [`oam-schema`](https://crates.io/crates/oam-schema) | `LlmSchema` derive macro |
 
-### Specific Test Suite
-```bash
-cargo test --test integration grpc_executor_tests
-cargo test --test integration tcp_tests
-cargo test --test unit executor_tests
-```
+## License
 
-## Architecture Highlights
-
-### Asynchronous Execution Engine
-- ExecutionEngine for high-throughput concurrent query management
-- QueryPriority system for request ordering (Critical > High > Normal > Low)
-- Lock-free metrics via Arc<Atomic*> for performance
-- Integrated async ConnectionPool with semaphore-based concurrency control
-- tokio::JoinSet task management for concurrent query execution with automatic result collection
-- Advanced metrics: success rates, latency percentiles, per-database statistics
-- Real-time performance monitoring and database-specific insights
-- Result status tracking: Pending → Completed/Failed/Cancelled state machine
-- Synchronous and asynchronous result retrieval with timeout support
-- UUID-based result lookup for distributed task coordination
-- Task cancellation with CancellationToken: prevents cancellation of completed tasks
-- Automatic result cleanup and status marking for cancelled tasks
-- Result expiration with automatic TTL (30ms default) and garbage collection
-- Memory-efficient result storage with automatic cleanup of expired results
-
-### Distributed Query Execution
-- Single service interface works with local, TCP, or gRPC backends
-- Transparent client location abstraction
-- Full async/await support throughout
-
-### Event-Driven Models
-- ModelChanged events for all entity operations
-- Type-based event subscriptions
-- Global EventBus for cross-cutting concerns (audit, webhooks, sync)
-
-### Type-Safe gRPC
-- Proto definitions ensure schema compatibility
-- Compile-time code generation via Tonic
-- Polyglot client support (Python, Go, .NET, JavaScript)
-
-### Composable Mappers
-- Trait-based abstraction for easy extension
-- Mix multiple backends in single application
-- Consistent error handling and timeouts
-
-## Future Enhancements
-
-- PostgreSQL support in mirror module
-- Distributed transaction support across mappers
-- Caching layer for schema queries
-- Additional authentication providers
-- Performance metrics and tracing
-- Async connection pooling
-
-Run tests:
-
-```bash
-cd roam-public
-cargo test
-```
+Licensed under either of [Apache License 2.0](LICENSE-APACHE) or [MIT License](LICENSE-MIT) at your option.

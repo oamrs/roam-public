@@ -6,6 +6,7 @@ description = "Object Agent Mapping framework for distributed systems and agents
 license = "MIT OR Apache-2.0"
 authors = ["OAMRS Contributors"]
 repository = "https://github.com/oamrs/roam"
+readme = "README.md"
 keywords = ["agent", "mapping", "distributed", "framework"]
 categories = ["development-tools"]
 
