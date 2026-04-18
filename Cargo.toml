@@ -1,6 +1,6 @@
 [package]
 name = "oam"
-version = "0.1.0"
+version = "0.1.1"
 edition = "2021"
 description = "Object Agent Mapping framework for distributed systems and agents"
 license = "MIT OR Apache-2.0"
@@ -25,8 +25,8 @@ async-trait = "0.1"
 tokio = { version = "1", features = ["rt", "rt-multi-thread", "macros", "sync", "net", "time", "io-util", "signal"] }
 uuid = { version = "1.0", features = ["v4", "serde"] }
 chrono = { version = "0.4", features = ["serde"] }
-roam-schema = { package = "oam-schema", version = "0.1.0", path = "../roam-schema" }
-roam-proto = { package = "oam-proto", version = "0.1.0", path = "../roam-proto" }
+roam-schema = { package = "oam-schema", version = "0.1.1", path = "../roam-schema" }
+roam-proto = { package = "oam-proto", version = "0.1.1", path = "../roam-proto" }
 tonic = "0.11"
 prost = "0.12"
 tokio-stream = { version = "0.1", features = ["net"] }
