@@ -620,16 +620,16 @@ dependencies = [
 
 [[package]]
 name = "oam"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "anyhow",
  "async-trait",
  "chrono",
+ "oam-proto",
+ "oam-schema",
  "once_cell",
  "prost",
  "regex",
- "roam-proto",
- "roam-schema",
  "rusqlite",
  "schemars",
  "serde",
@@ -641,6 +641,28 @@ dependencies = [
  "tokio-stream",
  "tonic",
  "uuid",
+]
+
+[[package]]
+name = "oam-proto"
+version = "0.1.1"
+dependencies = [
+ "prost",
+ "protobuf-src",
+ "tonic",
+ "tonic-build",
+]
+
+[[package]]
+name = "oam-schema"
+version = "0.1.1"
+dependencies = [
+ "proc-macro2",
+ "quote",
+ "schemars",
+ "serde",
+ "serde_json",
+ "syn",
 ]
 
 [[package]]
@@ -898,28 +920,6 @@ name = "regex-syntax"
 version = "0.8.8"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "7a2d987857b319362043e95f5353c0535c1f58eec5336fdfcf626430af7def58"
-
-[[package]]
-name = "roam-proto"
-version = "0.1.0"
-dependencies = [
- "prost",
- "protobuf-src",
- "tonic",
- "tonic-build",
-]
-
-[[package]]
-name = "roam-schema"
-version = "0.1.0"
-dependencies = [
- "proc-macro2",
- "quote",
- "schemars",
- "serde",
- "serde_json",
- "syn",
-]
 
 [[package]]
 name = "rusqlite"
