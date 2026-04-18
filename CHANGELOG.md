@@ -1,5 +1,19 @@
 # Changelog
 
+## [0.4.0](https://github.com/oamrs/roam/compare/oam-v0.3.0...oam-v0.4.0) (2026-04-18)
+
+
+### Features
+
+* constraint-to-JSON-schema mapping across Rust, Python, and .NET SDKs ([a7802dd](https://github.com/oamrs/roam/commit/a7802dd90e45ffb4e991c14ac98391c9fdc51bff))
+
+
+### Bug Fixes
+
+* address PR review comments ([b2c8ae0](https://github.com/oamrs/roam/commit/b2c8ae00ec169f9e4f6ea5685406b06a023daa43))
+* **deps:** bump oam-schema and oam-proto deps to 0.3.0 in roam-public ([1fca63c](https://github.com/oamrs/roam/commit/1fca63c03a61973c95e980a0ab6076f63414e036))
+* **publish:** remove invalid 'memory:' file from roam-public ([7748567](https://github.com/oamrs/roam/commit/7748567c2ac74bfa71258aacb8bb7318f33f95fe))
+
 ## [0.3.0](https://github.com/oamrs/roam/compare/oam-v0.2.0...oam-v0.3.0) (2026-04-18)
 
 
