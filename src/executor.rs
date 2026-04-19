@@ -339,10 +339,7 @@ impl QueryServiceImpl {
     /// Checks that the table referenced in the query is within the set of registered tables
     /// for CODE_FIRST schema mode. Returns an error message if access is denied, or `None`
     /// if the access is allowed.
-    fn validate_code_first_table_access(
-        query: &str,
-        allowed_tables: &[String],
-    ) -> Option<String> {
+    fn validate_code_first_table_access(query: &str, allowed_tables: &[String]) -> Option<String> {
         let Some(from_pos) = find_top_level_keyword_position(query, "FROM") else {
             return None; // No FROM clause — let downstream validation handle it
         };
@@ -352,13 +349,18 @@ impl QueryServiceImpl {
         let raw_upper = after_from_upper.split_whitespace().next().unwrap_or("");
         let trimmed_upper = raw_upper.trim_end_matches(';');
         let segment_upper = trimmed_upper.rsplit('.').next().unwrap_or(trimmed_upper);
-        let normalized = segment_upper.trim_matches(|c| c == '"' || c == '`' || c == '[' || c == ']');
+        let normalized =
+            segment_upper.trim_matches(|c| c == '"' || c == '`' || c == '[' || c == ']');
 
         let after_from_original = query[from_pos + 4..].trim_start();
         let raw_original = after_from_original.split_whitespace().next().unwrap_or("");
         let trimmed_original = raw_original.trim_end_matches(';');
-        let segment_original = trimmed_original.rsplit('.').next().unwrap_or(trimmed_original);
-        let display_name = segment_original.trim_matches(|c| c == '"' || c == '`' || c == '[' || c == ']');
+        let segment_original = trimmed_original
+            .rsplit('.')
+            .next()
+            .unwrap_or(trimmed_original);
+        let display_name =
+            segment_original.trim_matches(|c| c == '"' || c == '`' || c == '[' || c == ']');
 
         let is_allowed = allowed_tables
             .iter()
@@ -368,10 +370,8 @@ impl QueryServiceImpl {
             None
         } else {
             Some(format!(
-                "Table '{}' is not registered in the schema. \
-                 CODE_FIRST mode restricts queries to registered tables: {}",
+                "Table '{}' is not registered in the schema for CODE_FIRST mode",
                 display_name,
-                allowed_tables.join(", ")
             ))
         }
     }
