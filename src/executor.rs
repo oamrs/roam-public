@@ -308,6 +308,21 @@ impl QueryServiceImpl {
             });
         }
 
+        // Enforce CODE_FIRST schema mode: queries are restricted to the registered table set.
+        // Only applied when schema_mode is CODE_FIRST and table_names are explicitly registered.
+        if let Some(ctx) = runtime_context {
+            if ctx.schema_mode.as_deref() == Some("CODE_FIRST") && !ctx.table_names.is_empty() {
+                if let Some(error_message) =
+                    Self::validate_code_first_table_access(&request.query, &ctx.table_names)
+                {
+                    return Ok(ValidationResponse {
+                        valid: false,
+                        error_message,
+                    });
+                }
+            }
+        }
+
         let db_path = match &self.db_path {
             Some(path) => path,
             None => {
@@ -319,6 +334,51 @@ impl QueryServiceImpl {
         };
 
         Self::validate_query_against_db(db_path, &request, policy_context)
+    }
+
+    /// Checks that the table referenced in the query is within the set of registered tables
+    /// for CODE_FIRST schema mode. Returns an error message if access is denied, or `None`
+    /// if the access is allowed.
+    fn validate_code_first_table_access(
+        query: &str,
+        allowed_tables: &[String],
+    ) -> Option<String> {
+        let Some(from_pos) = find_top_level_keyword_position(query, "FROM") else {
+            return None; // No FROM clause — let downstream validation handle it
+        };
+
+        let query_upper = query.to_uppercase();
+        let after_from_upper = query_upper[from_pos + 4..].trim_start();
+        let raw_token_upper = after_from_upper.split_whitespace().next().unwrap_or("");
+        let raw_token_upper = raw_token_upper.trim_end_matches(';');
+        let last_segment_upper = raw_token_upper.rsplit('.').next().unwrap_or(raw_token_upper);
+        let normalized = last_segment_upper
+            .trim_matches(|c| c == '"' || c == '`' || c == '[' || c == ']');
+
+        let after_from_original = query[from_pos + 4..].trim_start();
+        let raw_token_original = after_from_original.split_whitespace().next().unwrap_or("");
+        let raw_token_original = raw_token_original.trim_end_matches(';');
+        let last_segment_original = raw_token_original
+            .rsplit('.')
+            .next()
+            .unwrap_or(raw_token_original);
+        let display_name = last_segment_original
+            .trim_matches(|c| c == '"' || c == '`' || c == '[' || c == ']');
+
+        let is_allowed = allowed_tables
+            .iter()
+            .any(|t| t.eq_ignore_ascii_case(normalized));
+
+        if is_allowed {
+            None
+        } else {
+            Some(format!(
+                "Table '{}' is not registered in the schema. \
+                 CODE_FIRST mode restricts queries to registered tables: {}",
+                display_name,
+                allowed_tables.join(", ")
+            ))
+        }
     }
 
     fn validate_query_against_db(

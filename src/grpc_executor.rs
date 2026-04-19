@@ -1,7 +1,7 @@
 use crate::executor::{
     ExecuteQueryRequest, GetSchemaRequest as ExecGetSchemaRequest,
-    GetTableRequest as ExecGetTableRequest, QueryRuntimeAugmentor, QueryServiceImpl, SchemaService,
-    SchemaServiceImpl, ValidateQueryRequest,
+    GetTableRequest as ExecGetTableRequest, QueryRuntimeAugmentor, QueryServiceImpl, QueryStatus,
+    SchemaService, SchemaServiceImpl, ValidateQueryRequest,
 };
 use crate::interceptor::{get_event_bus, Event as DomainEvent};
 use crate::runtime_context::QueryRuntimeContext;
@@ -259,10 +259,44 @@ impl ProtoQueryService for GrpcQueryServiceImpl {
             timeout_seconds: req.timeout_seconds,
         };
 
-        // TODO: Enforce schema mode consistently on the service side using the request's
-        // registered runtime context before execution continues.
+        let validate_req = ValidateQueryRequest {
+            db_identifier: exec_req.db_identifier.clone(),
+            query: exec_req.query.clone(),
+            parameters: Default::default(),
+        };
 
         let service = self.inner.lock().await;
+
+        let validation = service
+            .validate_query_with_runtime_context(validate_req, runtime_context.clone())
+            .await
+            .map_err(Status::internal)?;
+
+        if !validation.valid {
+            use crate::interceptor::{get_event_bus, Event as DomainEvent};
+            use chrono::Utc;
+
+            let timestamp = Utc::now().to_rfc3339();
+            let event = DomainEvent::query_validation_failed(
+                exec_req.db_identifier.clone(),
+                exec_req.query.clone(),
+                validation.error_message.clone(),
+                timestamp.clone(),
+                runtime_context.event_metadata(),
+            );
+            if let Err(e) = get_event_bus().dispatch_generic(&event) {
+                eprintln!("Event dispatch failed for query_validation_failed: {}", e);
+            }
+
+            return Ok(Response::new(ProtoExecuteQueryResponse {
+                status: QueryStatus::ValidationError as i32,
+                row_count: 0,
+                execution_ms: 0,
+                error_message: validation.error_message,
+                timestamp,
+            }));
+        }
+
         match service
             .execute_query_with_runtime_context(exec_req, runtime_context)
             .await
@@ -299,9 +333,6 @@ impl ProtoQueryService for GrpcQueryServiceImpl {
             query: req.query,
             parameters: Default::default(),
         };
-
-        // TODO: Enforce schema mode consistently during validation using the request's
-        // registered runtime context.
 
         let service = self.inner.lock().await;
         match service
