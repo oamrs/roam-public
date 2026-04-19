@@ -275,12 +275,18 @@ impl ProtoQueryService for GrpcQueryServiceImpl {
 
         if !validation.valid {
             let timestamp = Utc::now().to_rfc3339();
+            // Merge runtime context metadata with any augmentation metadata returned by
+            // validation (e.g. resolved_runtime_augmentation_id from a prompt hook).
+            let mut event_metadata = runtime_context.event_metadata();
+            for (k, v) in validation.event_metadata {
+                event_metadata.entry(k).or_insert(v);
+            }
             let event = DomainEvent::query_validation_failed(
                 exec_req.db_identifier.clone(),
                 exec_req.query.clone(),
                 validation.error_message.clone(),
                 timestamp.clone(),
-                runtime_context.event_metadata(),
+                event_metadata,
             );
             if let Err(e) = get_event_bus().dispatch_generic(&event) {
                 eprintln!("Event dispatch failed for query_validation_failed: {}", e);

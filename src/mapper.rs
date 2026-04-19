@@ -36,6 +36,7 @@ impl Mapper for TcpMapper {
         Ok(ValidationResponse {
             valid: true,
             error_message: String::new(),
+            event_metadata: Default::default(),
         })
     }
 
@@ -142,6 +143,7 @@ impl Mapper for GrpcMapper {
         Ok(ValidationResponse {
             valid: proto_response.valid,
             error_message: proto_response.error_message,
+            event_metadata: Default::default(),
         })
     }
 
