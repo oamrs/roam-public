@@ -9,7 +9,7 @@ use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeSet, HashMap, HashSet};
 
-#[derive(Debug, Serialize, Deserialize, JsonSchema, PartialEq)]
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, PartialEq)]
 pub struct Column {
     pub name: String,
     pub sql_type: String,
@@ -19,7 +19,7 @@ pub struct Column {
     pub enum_values: Option<Vec<String>>,
 }
 
-#[derive(Debug, Serialize, Deserialize, JsonSchema, PartialEq)]
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, PartialEq)]
 pub struct UniqueIndex {
     /// Name of the unique index as recorded in the database
     pub name: String,
@@ -27,7 +27,7 @@ pub struct UniqueIndex {
     pub columns: Vec<String>,
 }
 
-#[derive(Debug, Serialize, Deserialize, JsonSchema, PartialEq)]
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, PartialEq)]
 pub struct Index {
     /// Name of the index as recorded in the database
     pub name: String,
@@ -35,7 +35,33 @@ pub struct Index {
     pub columns: Vec<String>,
 }
 
-#[derive(Debug, Serialize, Deserialize, JsonSchema, PartialEq)]
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, PartialEq)]
+pub struct Trigger {
+    pub name: String,
+    pub event: String,
+    pub timing: String,
+    pub table_name: String,
+    pub body: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, PartialEq)]
+pub struct UserDefinedType {
+    pub name: String,
+    pub base_type: String,
+    pub check_constraint: Option<String>,
+    pub nullable: bool,
+    pub default_value: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, PartialEq)]
+pub struct FieldMapping {
+    pub logical_name: String,
+    pub physical_name: String,
+    pub orm_convention: String,
+    pub notes: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, PartialEq)]
 pub struct Table {
     pub name: String,
     pub columns: Vec<Column>,
@@ -43,14 +69,17 @@ pub struct Table {
     pub composite_foreign_keys: Vec<CompositeForeignKey>,
     pub unique_indexes: Vec<UniqueIndex>,
     pub indexes: Vec<Index>,
+    pub triggers: Vec<Trigger>,
+    pub field_mappings: Vec<FieldMapping>,
 }
 
-#[derive(Debug, Serialize, Deserialize, JsonSchema, PartialEq)]
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, PartialEq)]
 pub struct SchemaModel {
     pub tables: Vec<Table>,
+    pub user_defined_types: Vec<UserDefinedType>,
 }
 
-#[derive(Debug, Serialize, Deserialize, JsonSchema, PartialEq)]
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, PartialEq)]
 pub struct ForeignKey {
     /// column on this table
     pub column: String,
@@ -64,7 +93,7 @@ pub struct ForeignKey {
     pub on_update: Option<String>,
 }
 
-#[derive(Debug, Serialize, Deserialize, JsonSchema, PartialEq)]
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, PartialEq)]
 pub struct CompositeForeignKey {
     /// columns on this table (in order)
     pub columns: Vec<String>,
@@ -476,6 +505,8 @@ pub fn introspect_sqlite_path(path: &str) -> Result<SchemaModel> {
             let columns = introspect_columns(&conn, &t)?;
             let (foreign_keys, composite_foreign_keys) = introspect_foreign_keys(&conn, &t)?;
             let (unique_indexes, indexes) = introspect_indexes(&conn, &t)?;
+            let triggers = introspect_triggers(&conn, &t)?;
+            let field_mappings = detect_field_mappings(&columns);
             Ok(Table {
                 name: t,
                 columns,
@@ -483,9 +514,240 @@ pub fn introspect_sqlite_path(path: &str) -> Result<SchemaModel> {
                 composite_foreign_keys,
                 unique_indexes,
                 indexes,
+                triggers,
+                field_mappings,
             })
         })
         .collect::<Result<Vec<_>>>()?;
 
-    Ok(SchemaModel { tables })
+    let user_defined_types = introspect_user_defined_types(&conn)?;
+
+    Ok(SchemaModel {
+        tables,
+        user_defined_types,
+    })
+}
+
+fn introspect_triggers(conn: &Connection, table: &str) -> Result<Vec<Trigger>> {
+    let mut stmt =
+        conn.prepare("SELECT name, sql FROM sqlite_master WHERE type='trigger' AND tbl_name = ?")?;
+    let rows = stmt
+        .query_map([table], |row| {
+            let name: String = row.get(0)?;
+            let body: Option<String> = row.get(1)?;
+            Ok((name, body.unwrap_or_default()))
+        })?
+        .collect::<Result<Vec<_>, rusqlite::Error>>()?;
+
+    let mut triggers = Vec::new();
+    for (name, body) in rows {
+        let (timing, event) = parse_trigger_timing_event(&body);
+        triggers.push(Trigger {
+            name,
+            event,
+            timing,
+            table_name: table.to_string(),
+            body,
+        });
+    }
+    Ok(triggers)
+}
+
+fn parse_trigger_timing_event(ddl: &str) -> (String, String) {
+    let upper = ddl.to_uppercase();
+    let timing = if upper.contains("INSTEAD OF") {
+        "INSTEAD OF"
+    } else if upper.contains("BEFORE") {
+        "BEFORE"
+    } else {
+        "AFTER"
+    };
+    let event = if upper.contains("INSERT") {
+        "INSERT"
+    } else if upper.contains("DELETE") {
+        "DELETE"
+    } else {
+        "UPDATE"
+    };
+    (timing.to_string(), event.to_string())
+}
+
+fn introspect_user_defined_types(conn: &Connection) -> Result<Vec<UserDefinedType>> {
+    let standard_affinities = [
+        "INT",
+        "INTEGER",
+        "TINYINT",
+        "SMALLINT",
+        "MEDIUMINT",
+        "BIGINT",
+        "TEXT",
+        "CHARACTER",
+        "VARCHAR",
+        "NCHAR",
+        "NVARCHAR",
+        "CLOB",
+        "BLOB",
+        "REAL",
+        "DOUBLE",
+        "FLOAT",
+        "NUMERIC",
+        "DECIMAL",
+        "BOOLEAN",
+        "DATE",
+        "DATETIME",
+    ];
+    let sql_keywords = [
+        "PRIMARY",
+        "NOT",
+        "NULL",
+        "DEFAULT",
+        "UNIQUE",
+        "CHECK",
+        "REFERENCES",
+        "FOREIGN",
+        "KEY",
+        "CONSTRAINT",
+        "INDEX",
+        "CREATE",
+        "TABLE",
+        "VIEW",
+        "TRIGGER",
+        "ON",
+        "AS",
+        "END",
+        "BEGIN",
+        "SELECT",
+        "INSERT",
+        "UPDATE",
+        "DELETE",
+        "WHERE",
+        "NEW",
+        "OLD",
+        "RAISE",
+        "ABORT",
+    ];
+
+    let mut stmt =
+        conn.prepare("SELECT sql FROM sqlite_master WHERE type='table' AND sql IS NOT NULL")?;
+    let ddl_rows = stmt
+        .query_map([], |row| row.get::<_, String>(0))?
+        .collect::<Result<Vec<_>, rusqlite::Error>>()?;
+
+    let mut seen: HashSet<String> = HashSet::new();
+    let mut udts: Vec<UserDefinedType> = Vec::new();
+
+    // Parse column definitions: word followed by a non-keyword type token.
+    // Compiled once outside the loop to satisfy clippy::regex_creation_in_loops.
+    let col_type_re = Regex::new(r"(?i)\b([A-Za-z_][A-Za-z0-9_]*)\s+([A-Za-z_][A-Za-z0-9_]+)")
+        .expect("valid regex");
+
+    for sql in ddl_rows {
+        for caps in col_type_re.captures_iter(&sql) {
+            let type_token = caps[2].trim().to_uppercase();
+            if standard_affinities.iter().any(|a| type_token == *a) {
+                continue;
+            }
+            if sql_keywords.iter().any(|k| type_token == *k) {
+                continue;
+            }
+            if type_token.len() < 2 || seen.contains(&type_token) {
+                continue;
+            }
+            seen.insert(type_token.clone());
+            udts.push(UserDefinedType {
+                name: caps[2].trim().to_string(),
+                base_type: sqlite_type_affinity(&type_token).to_string(),
+                check_constraint: None,
+                nullable: true,
+                default_value: None,
+            });
+        }
+    }
+    Ok(udts)
+}
+
+fn sqlite_type_affinity(upper_type: &str) -> &'static str {
+    if upper_type.contains("INT") {
+        "INTEGER"
+    } else if upper_type.contains("CHAR")
+        || upper_type.contains("CLOB")
+        || upper_type.contains("TEXT")
+    {
+        "TEXT"
+    } else if upper_type.contains("BLOB") || upper_type.is_empty() {
+        "BLOB"
+    } else if upper_type.contains("REAL")
+        || upper_type.contains("FLOA")
+        || upper_type.contains("DOUB")
+    {
+        "REAL"
+    } else {
+        "NUMERIC"
+    }
+}
+
+fn detect_field_mappings(columns: &[Column]) -> Vec<FieldMapping> {
+    let mut mappings = Vec::new();
+    for col in columns {
+        let physical = &col.name;
+
+        if looks_like_camel_case(physical) {
+            mappings.push(FieldMapping {
+                logical_name: camel_to_snake(physical),
+                physical_name: physical.clone(),
+                orm_convention: "Hibernate".to_string(),
+                notes: Some("camelCase column mapped to snake_case property".to_string()),
+            });
+        } else if looks_like_pascal_case(physical) {
+            mappings.push(FieldMapping {
+                logical_name: camel_to_snake(physical),
+                physical_name: physical.clone(),
+                orm_convention: "EntityFramework".to_string(),
+                notes: Some("PascalCase column mapped to snake_case property".to_string()),
+            });
+        }
+
+        if let Some(stripped) = physical.strip_prefix('_') {
+            if !stripped.is_empty() {
+                mappings.push(FieldMapping {
+                    logical_name: stripped.to_string(),
+                    physical_name: physical.clone(),
+                    orm_convention: "EntityFramework".to_string(),
+                    notes: Some("EF Core shadow property convention".to_string()),
+                });
+            }
+        }
+    }
+    mappings
+}
+
+fn looks_like_camel_case(s: &str) -> bool {
+    let bytes = s.as_bytes();
+    if bytes.is_empty() || !bytes[0].is_ascii_lowercase() {
+        return false;
+    }
+    bytes[1..].iter().any(|b| b.is_ascii_uppercase())
+}
+
+fn looks_like_pascal_case(s: &str) -> bool {
+    let bytes = s.as_bytes();
+    if bytes.is_empty() || !bytes[0].is_ascii_uppercase() {
+        return false;
+    }
+    bytes[1..].iter().any(|b| b.is_ascii_lowercase())
+}
+
+fn camel_to_snake(s: &str) -> String {
+    let mut out = String::with_capacity(s.len() + 4);
+    for (i, ch) in s.char_indices() {
+        if ch.is_ascii_uppercase() {
+            if i > 0 {
+                out.push('_');
+            }
+            out.push(ch.to_ascii_lowercase());
+        } else {
+            out.push(ch);
+        }
+    }
+    out
 }

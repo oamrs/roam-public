@@ -864,3 +864,59 @@ async fn query_service_runtime_augmentation_does_not_override_canonical_metadata
         Some(&"finance-default".to_string())
     );
 }
+
+#[tokio::test]
+async fn schema_service_get_schema_with_db_path_includes_tables() {
+    use rusqlite::Connection;
+    let tmp = tempfile::NamedTempFile::new().expect("create tmp file");
+    let db_path = tmp.path().to_str().unwrap();
+    let conn = Connection::open(db_path).expect("open db");
+    conn.execute(
+        "CREATE TABLE products (id INTEGER PRIMARY KEY, name TEXT NOT NULL, price REAL)",
+        [],
+    )
+    .expect("create products table");
+    drop(conn);
+
+    let mut service = SchemaServiceImpl::new();
+    service.set_db_path(db_path).expect("set db path");
+
+    let request = GetSchemaRequest {
+        db_identifier: "test".to_string(),
+    };
+    let response = service.get_schema(request).await.expect("get_schema ok");
+
+    assert!(!response.tables.is_empty(), "tables should be populated");
+    assert_eq!(response.tables[0].name, "products");
+    assert!(
+        !response.tables[0].columns.is_empty(),
+        "columns should be populated"
+    );
+}
+
+#[tokio::test]
+async fn schema_service_get_table_with_db_path_includes_table_data() {
+    use rusqlite::Connection;
+    let tmp = tempfile::NamedTempFile::new().expect("create tmp file");
+    let db_path = tmp.path().to_str().unwrap();
+    let conn = Connection::open(db_path).expect("open db");
+    conn.execute(
+        "CREATE TABLE orders (id INTEGER PRIMARY KEY, amount REAL NOT NULL)",
+        [],
+    )
+    .expect("create orders table");
+    drop(conn);
+
+    let mut service = SchemaServiceImpl::new();
+    service.set_db_path(db_path).expect("set db path");
+
+    let request = GetTableRequest {
+        db_identifier: "test".to_string(),
+        table_name: "orders".to_string(),
+    };
+    let response = service.get_table(request).await.expect("get_table ok");
+
+    let table = response.table.expect("table should be present");
+    assert_eq!(table.name, "orders");
+    assert!(!table.columns.is_empty(), "columns should be populated");
+}

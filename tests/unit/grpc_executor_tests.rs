@@ -1,4 +1,5 @@
-use oam::grpc_executor::GrpcExecutor;
+use oam::grpc_executor::{table_to_table_def, GrpcExecutor};
+use oam::mirror::{Column, Index, Table, Trigger, UniqueIndex};
 use std::path::PathBuf;
 
 fn test_db_path() -> String {
@@ -100,4 +101,100 @@ async fn grpc_executor_rejects_invalid_address() {
         result.is_err(),
         "start_server should reject invalid address"
     );
+}
+
+#[test]
+fn table_to_table_def_maps_name_and_columns() {
+    let table = Table {
+        name: "users".to_string(),
+        columns: vec![Column {
+            name: "id".to_string(),
+            sql_type: "INTEGER".to_string(),
+            nullable: false,
+            primary_key: true,
+            default_value: None,
+            enum_values: None,
+        }],
+        foreign_keys: vec![],
+        composite_foreign_keys: vec![],
+        unique_indexes: vec![],
+        indexes: vec![],
+        triggers: vec![],
+        field_mappings: vec![],
+    };
+
+    let def = table_to_table_def(&table);
+
+    assert_eq!(def.name, "users");
+    assert_eq!(def.columns.len(), 1);
+    assert_eq!(def.columns[0].name, "id");
+    assert!(def.columns[0].is_primary_key);
+    assert!(!def.columns[0].is_nullable);
+}
+
+#[test]
+fn table_to_table_def_maps_unique_indexes() {
+    let table = Table {
+        name: "events".to_string(),
+        columns: vec![],
+        foreign_keys: vec![],
+        composite_foreign_keys: vec![],
+        unique_indexes: vec![UniqueIndex {
+            name: "idx_events_key".to_string(),
+            columns: vec!["key".to_string()],
+        }],
+        indexes: vec![Index {
+            name: "idx_events_created_at".to_string(),
+            columns: vec!["created_at".to_string()],
+        }],
+        triggers: vec![],
+        field_mappings: vec![],
+    };
+
+    let def = table_to_table_def(&table);
+
+    // Both unique and regular indexes should appear in def.indexes (unique ones with is_unique=true)
+    let unique_idx = def.indexes.iter().find(|i| i.name == "idx_events_key");
+    assert!(unique_idx.is_some(), "unique index should be present");
+    assert!(
+        unique_idx.unwrap().is_unique,
+        "unique index should have is_unique=true"
+    );
+
+    let regular_idx = def
+        .indexes
+        .iter()
+        .find(|i| i.name == "idx_events_created_at");
+    assert!(regular_idx.is_some(), "regular index should be present");
+    assert!(
+        !regular_idx.unwrap().is_unique,
+        "regular index should have is_unique=false"
+    );
+}
+
+#[test]
+fn table_to_table_def_maps_triggers() {
+    let table = Table {
+        name: "audit".to_string(),
+        columns: vec![],
+        foreign_keys: vec![],
+        composite_foreign_keys: vec![],
+        unique_indexes: vec![],
+        indexes: vec![],
+        triggers: vec![Trigger {
+            name: "trg_audit_after_insert".to_string(),
+            event: "INSERT".to_string(),
+            timing: "AFTER".to_string(),
+            table_name: "audit".to_string(),
+            body: "BEGIN SELECT 1; END".to_string(),
+        }],
+        field_mappings: vec![],
+    };
+
+    let def = table_to_table_def(&table);
+
+    assert_eq!(def.triggers.len(), 1);
+    assert_eq!(def.triggers[0].name, "trg_audit_after_insert");
+    assert_eq!(def.triggers[0].timing, "AFTER");
+    assert_eq!(def.triggers[0].event, "INSERT");
 }

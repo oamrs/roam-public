@@ -3,6 +3,7 @@ pub mod executor;
 pub mod ffi;
 pub mod generated;
 pub mod grpc_executor;
+pub mod handlers;
 pub mod interceptor;
 pub mod mapper;
 pub mod mirror;
@@ -16,18 +17,22 @@ pub use execution_engine::{
     QueryRequest, QueryResult, ResultStatus,
 };
 pub use executor::{
-    QueryRuntimeAugmentation, QueryRuntimeAugmentor, QueryService, QueryServiceImpl, QueryStatus,
-    SchemaService, SchemaServiceImpl,
+    MirrorProvider, QueryRuntimeAugmentation, QueryRuntimeAugmentor, QueryService,
+    QueryServiceImpl, QueryStatus, SchemaService, SchemaServiceImpl, SqliteMirrorProvider,
 };
 pub use grpc_executor::GrpcExecutor;
+pub use handlers::{
+    AuditLogHandler, DefaultHandlerChain, QueryMetricsHandler, QueryMetricsSnapshot,
+    SessionActivityHandler, SharedHandler,
+};
 pub use interceptor::{
-    get_event_bus, CriticalModelBehavior, CriticalStatusEvent, Event, EventBus, HasCriticalStatus,
-    RuntimeAugmentationAuditRecord,
+    get_event_bus, CriticalModelBehavior, CriticalStatusEvent, Event, EventBus, EventHandler,
+    HandleOutcome, HasCriticalStatus, RuntimeAugmentationAuditRecord,
 };
 pub use mapper::{GrpcMapper, LocalMapper, Mapper, TcpMapper};
 pub use mirror::{
-    introspect_sqlite_path, Column, CompositeForeignKey, ForeignKey, Index, SchemaModel, Table,
-    UniqueIndex,
+    introspect_sqlite_path, Column, CompositeForeignKey, FieldMapping, ForeignKey, Index,
+    SchemaModel, Table, Trigger, UniqueIndex, UserDefinedType,
 };
 pub use policy_engine::{
     AuthorizationContext, AuthorizedSubqueryShape, PolicyContext, PolicyDecision, PolicyEngine,

@@ -1,5 +1,6 @@
 use oam::interceptor::{
-    get_event_bus, CriticalModelBehavior, CriticalStatusEvent, Event, EventBus, HasCriticalStatus,
+    get_event_bus, CriticalModelBehavior, CriticalStatusEvent, Event, EventBus, EventHandler,
+    HandleOutcome, HasCriticalStatus,
 };
 use once_cell::sync::Lazy;
 use std::sync::Mutex;
@@ -663,4 +664,153 @@ async fn event_bus_subscriber_filters_by_type() {
         1,
         "Subscriber should only receive StatusChange events"
     );
+}
+
+// ── Chain of Responsibility ───────────────────────────────────────────────────
+
+/// Handlers must be invoked in their registration order so the pipeline is
+/// predictable and auditable.
+#[test]
+fn event_handler_chain_processes_in_registration_order() {
+    use std::sync::{Arc, Mutex};
+
+    struct OrderedHandler {
+        tag: u8,
+        log: Arc<Mutex<Vec<u8>>>,
+    }
+    impl EventHandler for OrderedHandler {
+        fn handle(&self, _event: &Event) -> HandleOutcome {
+            self.log.lock().unwrap().push(self.tag);
+            HandleOutcome::Continue
+        }
+    }
+
+    let event_bus = EventBus::new();
+    let log: Arc<Mutex<Vec<u8>>> = Arc::new(Mutex::new(Vec::new()));
+
+    event_bus
+        .register_handler(Box::new(OrderedHandler {
+            tag: 1,
+            log: log.clone(),
+        }))
+        .unwrap();
+    event_bus
+        .register_handler(Box::new(OrderedHandler {
+            tag: 2,
+            log: log.clone(),
+        }))
+        .unwrap();
+    event_bus
+        .register_handler(Box::new(OrderedHandler {
+            tag: 3,
+            log: log.clone(),
+        }))
+        .unwrap();
+
+    let event = Event::status_change(
+        "A".into(),
+        "1".into(),
+        "CRITICAL".into(),
+        "2024-01-01T00:00:00Z".into(),
+    );
+    event_bus.dispatch_generic(&event).unwrap();
+
+    assert_eq!(*log.lock().unwrap(), vec![1u8, 2, 3]);
+}
+
+/// A handler that returns `Stop` must short-circuit the chain so that all
+/// subsequent handlers are skipped.  This is the core CoR contract.
+#[test]
+fn event_handler_stop_halts_remaining_chain() {
+    use std::sync::{
+        atomic::{AtomicBool, Ordering},
+        Arc,
+    };
+
+    struct StopHandler;
+    impl EventHandler for StopHandler {
+        fn handle(&self, _event: &Event) -> HandleOutcome {
+            HandleOutcome::Stop
+        }
+    }
+
+    struct TrackingHandler(Arc<AtomicBool>);
+    impl EventHandler for TrackingHandler {
+        fn handle(&self, _event: &Event) -> HandleOutcome {
+            self.0.store(true, Ordering::SeqCst);
+            HandleOutcome::Continue
+        }
+    }
+
+    let event_bus = EventBus::new();
+    let second_called = Arc::new(AtomicBool::new(false));
+
+    event_bus.register_handler(Box::new(StopHandler)).unwrap();
+    event_bus
+        .register_handler(Box::new(TrackingHandler(second_called.clone())))
+        .unwrap();
+
+    let event = Event::status_change(
+        "A".into(),
+        "1".into(),
+        "CRITICAL".into(),
+        "2024-01-01T00:00:00Z".into(),
+    );
+    event_bus.dispatch_generic(&event).unwrap();
+
+    assert!(
+        !second_called.load(Ordering::SeqCst),
+        "Handler registered after Stop must not be called"
+    );
+}
+
+/// A handler that only processes `QueryExecuted` events must be skipped when
+/// an unrelated event type is dispatched.
+#[test]
+fn event_handler_only_called_for_its_event_type_via_continue_guard() {
+    use std::sync::{
+        atomic::{AtomicUsize, Ordering},
+        Arc,
+    };
+
+    struct QueryExecutedCounter(Arc<AtomicUsize>);
+    impl EventHandler for QueryExecutedCounter {
+        fn handle(&self, event: &Event) -> HandleOutcome {
+            if event.event_type() == "QueryExecuted" {
+                self.0.fetch_add(1, Ordering::SeqCst);
+            }
+            HandleOutcome::Continue
+        }
+    }
+
+    let event_bus = EventBus::new();
+    let count = Arc::new(AtomicUsize::new(0));
+
+    event_bus
+        .register_handler(Box::new(QueryExecutedCounter(count.clone())))
+        .unwrap();
+
+    // StatusChange — should NOT increment the counter
+    event_bus
+        .dispatch_generic(&Event::status_change(
+            "A".into(),
+            "1".into(),
+            "OK".into(),
+            "T".into(),
+        ))
+        .unwrap();
+    // QueryExecuted — should increment
+    event_bus
+        .dispatch_generic(&Event::query_executed(
+            "db".into(),
+            "SELECT 1".into(),
+            "ok".into(),
+            1,
+            5,
+            "T".into(),
+            Default::default(),
+        ))
+        .unwrap();
+
+    assert_eq!(count.load(Ordering::SeqCst), 1);
 }

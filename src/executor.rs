@@ -1,3 +1,4 @@
+use crate::mirror::SchemaModel;
 use crate::policy_engine::{PolicyContext, PolicyEngine, ToolIntent};
 use crate::runtime_context::QueryRuntimeContext;
 use once_cell::sync::Lazy;
@@ -6,6 +7,31 @@ use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::sync::Arc;
 use std::sync::Mutex;
+
+#[async_trait::async_trait]
+pub trait MirrorProvider: Send + Sync {
+    async fn introspect_schema(&self) -> Result<SchemaModel, String>;
+}
+
+pub struct SqliteMirrorProvider {
+    db_path: String,
+}
+
+impl SqliteMirrorProvider {
+    pub fn new(db_path: impl Into<String>) -> Self {
+        Self {
+            db_path: db_path.into(),
+        }
+    }
+}
+
+#[async_trait::async_trait]
+impl MirrorProvider for SqliteMirrorProvider {
+    async fn introspect_schema(&self) -> Result<SchemaModel, String> {
+        crate::mirror::introspect_sqlite_path(&self.db_path)
+            .map_err(|e| format!("SQLite introspection failed: {e}"))
+    }
+}
 
 static DB_CONNECTION_CACHE: Lazy<Mutex<HashMap<String, Connection>>> =
     Lazy::new(|| Mutex::new(HashMap::new()));
@@ -101,6 +127,10 @@ pub struct GetSchemaResponse {
     pub schema_id: String,
     pub database_type: String,
     pub generated_at: String,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub tables: Vec<crate::mirror::Table>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub user_defined_types: Vec<crate::mirror::UserDefinedType>,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -112,6 +142,8 @@ pub struct GetTableRequest {
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct GetTableResponse {
     pub generated_at: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub table: Option<crate::mirror::Table>,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -176,26 +208,8 @@ impl SchemaService for SchemaServiceImpl {
                 schema_id: format!("schema_{}", uuid::Uuid::new_v4()),
                 database_type: "SQLite".to_string(),
                 generated_at: chrono::Utc::now().to_rfc3339(),
-            });
-        }
-
-        use crate::mirror::introspect_sqlite_path;
-
-        let db_path = self.db_path.as_ref().unwrap();
-        let _schema = introspect_sqlite_path(db_path)
-            .map_err(|e| format!("Failed to introspect schema: {}", e))?;
-
-        Ok(GetSchemaResponse {
-            schema_id: format!("schema_{}", uuid::Uuid::new_v4()),
-            database_type: "SQLite".to_string(),
-            generated_at: chrono::Utc::now().to_rfc3339(),
-        })
-    }
-
-    async fn get_table(&self, request: GetTableRequest) -> Result<GetTableResponse, String> {
-        if self.db_path.is_none() {
-            return Ok(GetTableResponse {
-                generated_at: chrono::Utc::now().to_rfc3339(),
+                tables: vec![],
+                user_defined_types: vec![],
             });
         }
 
@@ -205,14 +219,38 @@ impl SchemaService for SchemaServiceImpl {
         let schema = introspect_sqlite_path(db_path)
             .map_err(|e| format!("Failed to introspect schema: {}", e))?;
 
-        let _table = schema
+        Ok(GetSchemaResponse {
+            schema_id: format!("schema_{}", uuid::Uuid::new_v4()),
+            database_type: "SQLite".to_string(),
+            generated_at: chrono::Utc::now().to_rfc3339(),
+            tables: schema.tables,
+            user_defined_types: schema.user_defined_types,
+        })
+    }
+
+    async fn get_table(&self, request: GetTableRequest) -> Result<GetTableResponse, String> {
+        if self.db_path.is_none() {
+            return Ok(GetTableResponse {
+                generated_at: chrono::Utc::now().to_rfc3339(),
+                table: None,
+            });
+        }
+
+        use crate::mirror::introspect_sqlite_path;
+
+        let db_path = self.db_path.as_ref().unwrap();
+        let schema = introspect_sqlite_path(db_path)
+            .map_err(|e| format!("Failed to introspect schema: {}", e))?;
+
+        let table = schema
             .tables
-            .iter()
+            .into_iter()
             .find(|t| t.name == request.table_name)
             .ok_or_else(|| format!("Table '{}' not found", request.table_name))?;
 
         Ok(GetTableResponse {
             generated_at: chrono::Utc::now().to_rfc3339(),
+            table: Some(table),
         })
     }
 }
@@ -342,7 +380,7 @@ impl QueryServiceImpl {
             None => {
                 return Ok(ValidationResponse {
                     valid: false,
-                    error_message: "Phase 1A: Query validation not yet implemented".to_string(),
+                    error_message: "Database path is not configured".to_string(),
                     event_metadata: augmentation_metadata,
                 });
             }
@@ -356,53 +394,69 @@ impl QueryServiceImpl {
         Ok(response)
     }
 
+    /// Extracts the primary table name from a `FROM` clause.
+    ///
+    /// Returns `Some((normalized, display))` where `normalized` is uppercased and unquoted
+    /// (for case-insensitive comparison) and `display` preserves original case and quoting
+    /// style (for error messages). Returns `None` when no top-level `FROM` clause is found.
+    fn extract_table_name_from_query(query: &str) -> Option<(String, String)> {
+        let from_pos = find_top_level_keyword_position(query, "FROM")?;
+
+        let query_upper = query.to_uppercase();
+        let raw_upper = query_upper[from_pos + 4..]
+            .split_whitespace()
+            .next()
+            .unwrap_or("")
+            .trim_end_matches(';');
+        let normalized = raw_upper
+            .rsplit('.')
+            .next()
+            .unwrap_or(raw_upper)
+            .trim_matches(|c| c == '"' || c == '`' || c == '[' || c == ']')
+            .to_string();
+
+        let raw_original = query[from_pos + 4..]
+            .split_whitespace()
+            .next()
+            .unwrap_or("")
+            .trim_end_matches(';');
+        let display = raw_original
+            .rsplit('.')
+            .next()
+            .unwrap_or(raw_original)
+            .trim_matches(|c| c == '"' || c == '`' || c == '[' || c == ']')
+            .to_string();
+
+        Some((normalized, display))
+    }
+
     /// Checks that the table referenced in the query is within the set of registered tables
     /// for CODE_FIRST schema mode. Returns an error message if access is denied, or `None`
     /// if the access is allowed.
     fn validate_code_first_table_access(query: &str, allowed_tables: &[String]) -> Option<String> {
-        let Some(from_pos) = find_top_level_keyword_position(query, "FROM") else {
-            return None; // No FROM clause — let downstream validation handle it
-        };
+        let (normalized, display) = Self::extract_table_name_from_query(query)?;
 
-        let query_upper = query.to_uppercase();
-        let after_from_upper = query_upper[from_pos + 4..].trim_start();
-        let raw_upper = after_from_upper.split_whitespace().next().unwrap_or("");
-        let trimmed_upper = raw_upper.trim_end_matches(';');
-        let segment_upper = trimmed_upper.rsplit('.').next().unwrap_or(trimmed_upper);
-        let normalized =
-            segment_upper.trim_matches(|c| c == '"' || c == '`' || c == '[' || c == ']');
-
-        let after_from_original = query[from_pos + 4..].trim_start();
-        let raw_original = after_from_original.split_whitespace().next().unwrap_or("");
-        let trimmed_original = raw_original.trim_end_matches(';');
-        let segment_original = trimmed_original
-            .rsplit('.')
-            .next()
-            .unwrap_or(trimmed_original);
-        let display_name =
-            segment_original.trim_matches(|c| c == '"' || c == '`' || c == '[' || c == ']');
-
-        let is_allowed = allowed_tables
+        if allowed_tables
             .iter()
-            .any(|t| t.eq_ignore_ascii_case(normalized));
-
-        if is_allowed {
+            .any(|t| t.eq_ignore_ascii_case(&normalized))
+        {
             None
         } else {
             Some(format!(
                 "Table '{}' is not registered in the schema for CODE_FIRST mode",
-                display_name,
+                display,
             ))
         }
     }
 
+    /// Validate a query against both the configured policy and the live schema.
+    ///
+    /// This is the **Template Method** composition: policy gate first, then schema gate.
     fn validate_query_against_db(
         db_path: &str,
         request: &ValidateQueryRequest,
         policy_context: Option<&PolicyContext>,
     ) -> Result<ValidationResponse, String> {
-        use crate::mirror::introspect_sqlite_path;
-
         if let Some(error_message) = Self::validate_query_policy(&request.query, policy_context) {
             return Ok(ValidationResponse {
                 valid: false,
@@ -410,54 +464,7 @@ impl QueryServiceImpl {
                 event_metadata: Default::default(),
             });
         }
-
-        let Some(from_pos) = find_top_level_keyword_position(&request.query, "FROM") else {
-            return Ok(ValidationResponse {
-                valid: false,
-                error_message: "SELECT statements must include a FROM clause".to_string(),
-                event_metadata: Default::default(),
-            });
-        };
-
-        let schema = introspect_sqlite_path(db_path)
-            .map_err(|e| format!("Failed to introspect schema: {}", e))?;
-
-        let query_upper = request.query.to_uppercase();
-        let after_from_upper = query_upper[from_pos + 4..].trim_start();
-        let raw_table_token_upper = after_from_upper.split_whitespace().next().unwrap_or("");
-
-        let after_from_original = request.query[from_pos + 4..].trim_start();
-        let raw_table_token_original = after_from_original.split_whitespace().next().unwrap_or("");
-
-        let raw_token = raw_table_token_upper.trim_end_matches(';');
-        let last_segment = raw_token.rsplit('.').next().unwrap_or(raw_token);
-        let normalized_table_name = last_segment
-            .trim_matches(|c| c == '"' || c == '`' || c == '[' || c == ']')
-            .to_string();
-
-        let original_token = raw_table_token_original.trim_end_matches(';');
-        let original_last_segment = original_token.rsplit('.').next().unwrap_or(original_token);
-        let display_table_name = original_last_segment
-            .trim_matches(|c| c == '"' || c == '`' || c == '[' || c == ']')
-            .to_string();
-
-        if !schema
-            .tables
-            .iter()
-            .any(|t| t.name.eq_ignore_ascii_case(&normalized_table_name))
-        {
-            return Ok(ValidationResponse {
-                valid: false,
-                error_message: format!("Table '{}' does not exist in schema", display_table_name),
-                event_metadata: Default::default(),
-            });
-        }
-
-        Ok(ValidationResponse {
-            valid: true,
-            error_message: String::new(),
-            event_metadata: Default::default(),
-        })
+        Self::validate_query_schema(db_path, request)
     }
 
     fn validate_query_policy(
@@ -473,7 +480,8 @@ impl QueryServiceImpl {
     ) -> Result<ValidationResponse, String> {
         use crate::mirror::introspect_sqlite_path;
 
-        let Some(from_pos) = find_top_level_keyword_position(&request.query, "FROM") else {
+        let Some((normalized, display)) = Self::extract_table_name_from_query(&request.query)
+        else {
             return Ok(ValidationResponse {
                 valid: false,
                 error_message: "SELECT statements must include a FROM clause".to_string(),
@@ -484,42 +492,23 @@ impl QueryServiceImpl {
         let schema = introspect_sqlite_path(db_path)
             .map_err(|e| format!("Failed to introspect schema: {}", e))?;
 
-        let query_upper = request.query.to_uppercase();
-        let after_from_upper = query_upper[from_pos + 4..].trim_start();
-        let raw_table_token_upper = after_from_upper.split_whitespace().next().unwrap_or("");
-
-        let after_from_original = request.query[from_pos + 4..].trim_start();
-        let raw_table_token_original = after_from_original.split_whitespace().next().unwrap_or("");
-
-        let raw_token = raw_table_token_upper.trim_end_matches(';');
-        let last_segment = raw_token.rsplit('.').next().unwrap_or(raw_token);
-        let normalized_table_name = last_segment
-            .trim_matches(|c| c == '"' || c == '`' || c == '[' || c == ']')
-            .to_string();
-
-        let original_token = raw_table_token_original.trim_end_matches(';');
-        let original_last_segment = original_token.rsplit('.').next().unwrap_or(original_token);
-        let display_table_name = original_last_segment
-            .trim_matches(|c| c == '"' || c == '`' || c == '[' || c == ']')
-            .to_string();
-
-        if !schema
+        if schema
             .tables
             .iter()
-            .any(|t| t.name.eq_ignore_ascii_case(&normalized_table_name))
+            .any(|t| t.name.eq_ignore_ascii_case(&normalized))
         {
-            return Ok(ValidationResponse {
-                valid: false,
-                error_message: format!("Table '{}' does not exist in schema", display_table_name),
+            Ok(ValidationResponse {
+                valid: true,
+                error_message: String::new(),
                 event_metadata: Default::default(),
-            });
+            })
+        } else {
+            Ok(ValidationResponse {
+                valid: false,
+                error_message: format!("Table '{}' does not exist in schema", display),
+                event_metadata: Default::default(),
+            })
         }
-
-        Ok(ValidationResponse {
-            valid: true,
-            error_message: String::new(),
-            event_metadata: Default::default(),
-        })
     }
 
     async fn execute_query_internal(

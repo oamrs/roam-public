@@ -97,6 +97,14 @@ pub enum Event {
         session_id: String,
         timestamp: String,
     },
+    #[serde(rename = "TriggerFired")]
+    TriggerFired {
+        table_name: String,
+        trigger_name: String,
+        operation: String,
+        row_id: Option<String>,
+        timestamp: String,
+    },
 }
 
 impl Event {
@@ -232,6 +240,21 @@ impl Event {
         }
     }
 
+    pub fn trigger_fired(
+        table_name: String,
+        trigger_name: String,
+        operation: String,
+        row_id: Option<String>,
+    ) -> Self {
+        Event::TriggerFired {
+            table_name,
+            trigger_name,
+            operation,
+            row_id,
+            timestamp: chrono::Utc::now().to_rfc3339(),
+        }
+    }
+
     pub fn event_type(&self) -> &str {
         match self {
             Event::StatusChange { .. } => "StatusChange",
@@ -243,6 +266,7 @@ impl Event {
             Event::RuntimeAugmentationAuditRecorded { .. } => "RuntimeAugmentationAuditRecorded",
             Event::ModelChanged { .. } => "ModelChanged",
             Event::SessionRegistered { .. } => "SessionRegistered",
+            Event::TriggerFired { .. } => "TriggerFired",
         }
     }
 
@@ -373,6 +397,21 @@ impl Event {
                 map.insert("session_id".to_string(), session_id.clone());
                 map.insert("timestamp".to_string(), timestamp.clone());
             }
+            Event::TriggerFired {
+                table_name,
+                trigger_name,
+                operation,
+                row_id,
+                timestamp,
+            } => {
+                map.insert("table_name".to_string(), table_name.clone());
+                map.insert("trigger_name".to_string(), trigger_name.clone());
+                map.insert("operation".to_string(), operation.clone());
+                if let Some(id) = row_id {
+                    map.insert("row_id".to_string(), id.clone());
+                }
+                map.insert("timestamp".to_string(), timestamp.clone());
+            }
         }
 
         map
@@ -385,6 +424,29 @@ type SubscriberMap = HashMap<usize, SubscriberFn>;
 
 type TypeSubscriberMap = HashMap<String, Vec<SubscriberFn>>;
 
+// ── Chain of Responsibility ────────────────────────────────────────────────────
+
+/// Controls whether the remaining handlers in the chain are invoked.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum HandleOutcome {
+    /// Allow the next handler in the chain to run.
+    Continue,
+    /// Short-circuit the chain; no further handlers are invoked.
+    Stop,
+}
+
+/// A segment in the `EventBus` chain-of-responsibility pipeline.
+///
+/// Implementors receive a reference to the dispatched `Event`, perform their
+/// work (e.g., audit logging, gRPC stream forwarding, access control checks),
+/// and return a [`HandleOutcome`] to signal whether the remaining chain should
+/// continue.
+pub trait EventHandler: Send + Sync {
+    fn handle(&self, event: &Event) -> HandleOutcome;
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+
 pub struct EventBus {
     events: Mutex<Vec<CriticalStatusEvent>>,
     generic_events: Mutex<Vec<Event>>,
@@ -392,6 +454,7 @@ pub struct EventBus {
     subscribers: Mutex<SubscriberMap>,
     type_subscribers: Mutex<TypeSubscriberMap>,
     next_subscriber_id: AtomicUsize,
+    handler_chain: Mutex<Vec<Box<dyn EventHandler>>>,
 }
 
 impl Default for EventBus {
@@ -409,6 +472,7 @@ impl EventBus {
             subscribers: Mutex::new(HashMap::new()),
             type_subscribers: Mutex::new(HashMap::new()),
             next_subscriber_id: AtomicUsize::new(1),
+            handler_chain: Mutex::new(Vec::new()),
         }
     }
 
@@ -478,7 +542,31 @@ impl EventBus {
                 callback(event);
             }
         }
+        drop(type_subs);
 
+        // Walk the chain-of-responsibility handler pipeline
+        let handlers = self
+            .handler_chain
+            .lock()
+            .map_err(|e| format!("Failed to acquire lock: {}", e))?;
+        for handler in handlers.iter() {
+            if handler.handle(event) == HandleOutcome::Stop {
+                break;
+            }
+        }
+
+        Ok(())
+    }
+
+    /// Append a [`EventHandler`] to the end of the chain-of-responsibility
+    /// pipeline.  Handlers are invoked in registration order during every call
+    /// to [`dispatch_generic`].  A handler may return [`HandleOutcome::Stop`]
+    /// to prevent subsequent handlers from running.
+    pub fn register_handler(&self, handler: Box<dyn EventHandler>) -> Result<(), String> {
+        self.handler_chain
+            .lock()
+            .map_err(|e| format!("Failed to acquire lock: {}", e))?
+            .push(handler);
         Ok(())
     }
 

@@ -29,9 +29,69 @@ use roam_proto::v1::query::{
 };
 use roam_proto::v1::schema::{
     schema_service_server::{SchemaService as ProtoSchemaService, SchemaServiceServer},
-    GetSchemaRequest, GetSchemaResponse, GetTableRequest, GetTableResponse,
+    ColumnDef, FieldMappingDef, GetSchemaRequest, GetSchemaResponse, GetTableRequest,
+    GetTableResponse, IndexDef, TableDef, TriggerDef, UserDefinedTypeDef,
 };
 use tokio_stream::wrappers::ReceiverStream;
+
+/// Convert a [`crate::mirror::Table`] to its proto [`TableDef`] representation.
+pub fn table_to_table_def(table: &crate::mirror::Table) -> TableDef {
+    let columns = table
+        .columns
+        .iter()
+        .map(|c| ColumnDef {
+            name: c.name.clone(),
+            data_type: c.sql_type.clone(),
+            is_nullable: c.nullable,
+            default_value: c.default_value.clone().unwrap_or_default(),
+            is_primary_key: c.primary_key,
+        })
+        .collect();
+
+    let mut indexes: Vec<IndexDef> = table
+        .unique_indexes
+        .iter()
+        .map(|i| IndexDef {
+            name: i.name.clone(),
+            columns: i.columns.clone(),
+            is_unique: true,
+        })
+        .collect();
+    indexes.extend(table.indexes.iter().map(|i| IndexDef {
+        name: i.name.clone(),
+        columns: i.columns.clone(),
+        is_unique: false,
+    }));
+
+    let triggers = table
+        .triggers
+        .iter()
+        .map(|t| TriggerDef {
+            name: t.name.clone(),
+            timing: t.timing.clone(),
+            event: t.event.clone(),
+            body: t.body.clone(),
+        })
+        .collect();
+
+    let field_mappings = table
+        .field_mappings
+        .iter()
+        .map(|fm| FieldMappingDef {
+            column_name: fm.physical_name.clone(),
+            snake_case_name: fm.logical_name.clone(),
+            convention: fm.orm_convention.clone(),
+        })
+        .collect();
+
+    TableDef {
+        name: table.name.clone(),
+        columns,
+        indexes,
+        triggers,
+        field_mappings,
+    }
+}
 
 pub struct GrpcExecutor {
     query_service: Arc<Mutex<QueryServiceImpl>>,
@@ -62,11 +122,14 @@ struct SessionRegistry {
 
 impl SessionRegistry {
     async fn insert(&self, session: RegisteredAgentSession) {
-        // TODO: Add session lifecycle management so stored registrations can expire or be cleared explicitly.
         self.sessions
             .lock()
             .await
             .insert(session.session_id.clone(), session);
+    }
+
+    async fn remove(&self, session_id: &str) {
+        self.sessions.lock().await.remove(session_id);
     }
 
     async fn get(&self, session_id: &str) -> Option<RegisteredAgentSession> {
@@ -91,6 +154,10 @@ impl GrpcAgentServiceImpl {
 
     pub async fn registered_session(&self, session_id: &str) -> Option<RegisteredAgentSession> {
         self.sessions.get(session_id).await
+    }
+
+    pub async fn unregister_session(&self, session_id: &str) {
+        self.sessions.remove(session_id).await;
     }
 }
 
@@ -162,6 +229,7 @@ impl ProtoAgentService for GrpcAgentServiceImpl {
                     let _ = tx.try_send(Ok(Event {
                         r#type: event.event_type().to_string(),
                         payload,
+                        typed_payload: None,
                     }));
                 }
             }))
@@ -234,22 +302,37 @@ struct GrpcQueryServiceImpl {
     sessions: Arc<SessionRegistry>,
 }
 
+impl GrpcQueryServiceImpl {
+    /// Enriches a `QueryRuntimeContext` with the registered agent metadata for the
+    /// associated session, if one is present. This is the single authoritative place
+    /// where session state is promoted into the request context.
+    async fn enrich_context_from_session(
+        &self,
+        context: QueryRuntimeContext,
+    ) -> QueryRuntimeContext {
+        let Some(session_id) = context.session_id.clone() else {
+            return context;
+        };
+        let Some(session) = self.sessions.get(&session_id).await else {
+            return context;
+        };
+        context.with_registered_agent(
+            &session.agent_id,
+            &session.version,
+            session.schema_mode_name(),
+        )
+    }
+}
+
 #[tonic::async_trait]
 impl ProtoQueryService for GrpcQueryServiceImpl {
     async fn execute_query(
         &self,
         request: Request<ProtoExecuteQueryRequest>,
     ) -> Result<Response<ProtoExecuteQueryResponse>, Status> {
-        let mut runtime_context = QueryRuntimeContext::from_metadata(request.metadata());
-        if let Some(session_id) = runtime_context.session_id.clone() {
-            if let Some(session) = self.sessions.get(&session_id).await {
-                runtime_context = runtime_context.with_registered_agent(
-                    &session.agent_id,
-                    &session.version,
-                    session.schema_mode_name(),
-                );
-            }
-        }
+        let runtime_context = self
+            .enrich_context_from_session(QueryRuntimeContext::from_metadata(request.metadata()))
+            .await;
         let req = request.into_inner();
 
         let exec_req = ExecuteQueryRequest {
@@ -320,16 +403,9 @@ impl ProtoQueryService for GrpcQueryServiceImpl {
         &self,
         request: Request<ProtoValidateQueryRequest>,
     ) -> Result<Response<ValidationResponse>, Status> {
-        let mut runtime_context = QueryRuntimeContext::from_metadata(request.metadata());
-        if let Some(session_id) = runtime_context.session_id.clone() {
-            if let Some(session) = self.sessions.get(&session_id).await {
-                runtime_context = runtime_context.with_registered_agent(
-                    &session.agent_id,
-                    &session.version,
-                    session.schema_mode_name(),
-                );
-            }
-        }
+        let runtime_context = self
+            .enrich_context_from_session(QueryRuntimeContext::from_metadata(request.metadata()))
+            .await;
         let req = request.into_inner();
 
         let exec_req = ValidateQueryRequest {
@@ -370,11 +446,25 @@ impl ProtoSchemaService for GrpcSchemaServiceImpl {
 
         let service = self.inner.lock().await;
         match service.get_schema(exec_req).await {
-            Ok(schema_resp) => Ok(Response::new(GetSchemaResponse {
-                schema_id: schema_resp.schema_id,
-                database_type: schema_resp.database_type,
-                generated_at: schema_resp.generated_at,
-            })),
+            Ok(schema_resp) => {
+                let tables = schema_resp.tables.iter().map(table_to_table_def).collect();
+                let user_defined_types = schema_resp
+                    .user_defined_types
+                    .iter()
+                    .map(|u| UserDefinedTypeDef {
+                        name: u.name.clone(),
+                        base_type: u.base_type.clone(),
+                        variants: vec![],
+                    })
+                    .collect();
+                Ok(Response::new(GetSchemaResponse {
+                    schema_id: schema_resp.schema_id,
+                    database_type: schema_resp.database_type,
+                    generated_at: schema_resp.generated_at,
+                    tables,
+                    user_defined_types,
+                }))
+            }
             Err(e) => Err(Status::internal(e)),
         }
     }
@@ -394,13 +484,13 @@ impl ProtoSchemaService for GrpcSchemaServiceImpl {
         match service.get_table(exec_req).await {
             Ok(table_resp) => Ok(Response::new(GetTableResponse {
                 generated_at: table_resp.generated_at,
+                table: table_resp.table.as_ref().map(table_to_table_def),
             })),
             Err(e) => Err(Status::internal(e)),
         }
     }
 
-    // TODO: Add RegisterSchema RPC
-    // When implementing RegisterSchema, ensure that we validate the current
-    // agent's SchemaMode. If the agent connected with DATA_FIRST, this RPC
-    // MUST return a permissions error (e.g. PermissionDenied or InvalidArgument).
+    // Add RegisterSchema RPC here when CODE_FIRST mode support is needed.
+    // Validate agent SchemaMode == CODE_FIRST or HYBRID before accepting registration;
+    // DATA_FIRST agents must receive PermissionDenied.
 }

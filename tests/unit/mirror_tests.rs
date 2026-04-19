@@ -1,3 +1,4 @@
+use oam::MirrorProvider;
 use rusqlite::Connection;
 use tempfile::NamedTempFile;
 
@@ -970,4 +971,275 @@ fn json_schema_column_description_includes_default_value() {
         "column description must include 'Default:', got schema: {}",
         json_str
     );
+}
+
+// ── Phase: Trigger introspection ─────────────────────────────────────────────
+
+#[test]
+fn sqlite_introspects_after_insert_trigger() {
+    let tmp = NamedTempFile::new().expect("create tmp file");
+    let path = tmp.path().to_str().unwrap().to_string();
+
+    let conn = Connection::open(&path).expect("open tmp db");
+    conn.execute_batch(
+        "CREATE TABLE orders (id INTEGER PRIMARY KEY, status TEXT NOT NULL DEFAULT 'pending');
+         CREATE TABLE order_log (id INTEGER PRIMARY KEY, order_id INTEGER, action TEXT);
+         CREATE TRIGGER trg_order_insert
+             AFTER INSERT ON orders
+         BEGIN
+             INSERT INTO order_log (order_id, action) VALUES (NEW.id, 'created');
+         END;",
+    )
+    .expect("create tables and trigger");
+    drop(conn);
+
+    let schema = oam::introspect_sqlite_path(&path).expect("introspect");
+    let orders = schema
+        .tables
+        .iter()
+        .find(|t| t.name == "orders")
+        .expect("orders table");
+
+    let trigger = orders
+        .triggers
+        .iter()
+        .find(|t| t.name == "trg_order_insert")
+        .expect("trg_order_insert trigger must be found on orders table");
+
+    assert_eq!(trigger.event, "INSERT");
+    assert_eq!(trigger.timing, "AFTER");
+    assert_eq!(trigger.table_name, "orders");
+    assert!(!trigger.body.is_empty(), "trigger body must not be empty");
+}
+
+#[test]
+fn sqlite_introspects_before_update_trigger() {
+    let tmp = NamedTempFile::new().expect("create tmp file");
+    let path = tmp.path().to_str().unwrap().to_string();
+
+    let conn = Connection::open(&path).expect("open tmp db");
+    conn.execute_batch(
+        "CREATE TABLE products (id INTEGER PRIMARY KEY, price REAL NOT NULL);
+         CREATE TRIGGER trg_price_check
+             BEFORE UPDATE ON products
+         BEGIN
+             SELECT RAISE(ABORT, 'price must be positive') WHERE NEW.price <= 0;
+         END;",
+    )
+    .expect("create table and trigger");
+    drop(conn);
+
+    let schema = oam::introspect_sqlite_path(&path).expect("introspect");
+    let products = schema
+        .tables
+        .iter()
+        .find(|t| t.name == "products")
+        .expect("products table");
+
+    let trigger = products
+        .triggers
+        .iter()
+        .find(|t| t.name == "trg_price_check")
+        .expect("trg_price_check trigger");
+
+    assert_eq!(trigger.event, "UPDATE");
+    assert_eq!(trigger.timing, "BEFORE");
+}
+
+#[test]
+fn sqlite_table_with_no_triggers_has_empty_triggers_vec() {
+    let tmp = NamedTempFile::new().expect("create tmp file");
+    let path = tmp.path().to_str().unwrap().to_string();
+
+    let conn = Connection::open(&path).expect("open tmp db");
+    conn.execute("CREATE TABLE simple (id INTEGER PRIMARY KEY)", [])
+        .expect("create table");
+    drop(conn);
+
+    let schema = oam::introspect_sqlite_path(&path).expect("introspect");
+    let table = schema
+        .tables
+        .iter()
+        .find(|t| t.name == "simple")
+        .expect("simple table");
+
+    assert!(
+        table.triggers.is_empty(),
+        "table with no triggers must have empty triggers vec, got: {:?}",
+        table.triggers
+    );
+}
+
+// ── Phase: FieldMapping detection ────────────────────────────────────────────
+
+#[test]
+fn detect_camel_case_column_produces_hibernate_mapping() {
+    let tmp = NamedTempFile::new().expect("create tmp file");
+    let path = tmp.path().to_str().unwrap().to_string();
+
+    let conn = Connection::open(&path).expect("open tmp db");
+    conn.execute(
+        "CREATE TABLE legacy (id INTEGER PRIMARY KEY, userId INTEGER, createdAt TEXT)",
+        [],
+    )
+    .expect("create table");
+    drop(conn);
+
+    let schema = oam::introspect_sqlite_path(&path).expect("introspect");
+    let table = schema
+        .tables
+        .iter()
+        .find(|t| t.name == "legacy")
+        .expect("legacy table");
+
+    let mapping = table
+        .field_mappings
+        .iter()
+        .find(|m| m.physical_name == "userId")
+        .expect("mapping for userId must exist");
+
+    assert_eq!(mapping.logical_name, "user_id");
+    assert_eq!(mapping.orm_convention, "Hibernate");
+}
+
+#[test]
+fn detect_shadow_property_produces_ef_mapping() {
+    let tmp = NamedTempFile::new().expect("create tmp file");
+    let path = tmp.path().to_str().unwrap().to_string();
+
+    let conn = Connection::open(&path).expect("open tmp db");
+    conn.execute(
+        "CREATE TABLE ef_table (id INTEGER PRIMARY KEY, _tenantId INTEGER)",
+        [],
+    )
+    .expect("create table");
+    drop(conn);
+
+    let schema = oam::introspect_sqlite_path(&path).expect("introspect");
+    let table = schema
+        .tables
+        .iter()
+        .find(|t| t.name == "ef_table")
+        .expect("ef_table");
+
+    let mapping = table
+        .field_mappings
+        .iter()
+        .find(|m| m.physical_name == "_tenantId")
+        .expect("mapping for _tenantId must exist");
+
+    assert_eq!(mapping.logical_name, "tenantId");
+    assert_eq!(mapping.orm_convention, "EntityFramework");
+}
+
+#[test]
+fn snake_case_column_produces_no_field_mappings() {
+    let tmp = NamedTempFile::new().expect("create tmp file");
+    let path = tmp.path().to_str().unwrap().to_string();
+
+    let conn = Connection::open(&path).expect("open tmp db");
+    conn.execute(
+        "CREATE TABLE clean (id INTEGER PRIMARY KEY, user_name TEXT, created_at TEXT)",
+        [],
+    )
+    .expect("create table");
+    drop(conn);
+
+    let schema = oam::introspect_sqlite_path(&path).expect("introspect");
+    let table = schema
+        .tables
+        .iter()
+        .find(|t| t.name == "clean")
+        .expect("clean table");
+
+    assert!(
+        table.field_mappings.is_empty(),
+        "snake_case columns must produce no field mappings, got: {:?}",
+        table.field_mappings
+    );
+}
+
+// ── Phase: UserDefinedType introspection ─────────────────────────────────────
+
+#[test]
+fn schema_model_has_user_defined_types_field() {
+    let tmp = NamedTempFile::new().expect("create tmp file");
+    let path = tmp.path().to_str().unwrap().to_string();
+
+    let conn = Connection::open(&path).expect("open tmp db");
+    conn.execute("CREATE TABLE t (id INTEGER PRIMARY KEY)", [])
+        .expect("create table");
+    drop(conn);
+
+    // The field must exist and be accessible — even if empty for standard tables
+    let schema = oam::introspect_sqlite_path(&path).expect("introspect");
+    let _ = &schema.user_defined_types; // compile-time field access check
+}
+
+// ── Phase: MirrorProvider trait ───────────────────────────────────────────────
+
+#[test]
+fn sqlite_mirror_provider_introspects_schema() {
+    let tmp = NamedTempFile::new().expect("create tmp file");
+    let path = tmp.path().to_str().unwrap().to_string();
+
+    let conn = Connection::open(&path).expect("open tmp db");
+    conn.execute(
+        "CREATE TABLE users (id INTEGER PRIMARY KEY, name TEXT NOT NULL)",
+        [],
+    )
+    .expect("create table");
+    drop(conn);
+
+    let provider = oam::SqliteMirrorProvider::new(&path);
+    let schema = tokio::runtime::Runtime::new()
+        .expect("runtime")
+        .block_on(provider.introspect_schema())
+        .expect("introspect via MirrorProvider");
+
+    assert!(schema.tables.iter().any(|t| t.name == "users"));
+}
+
+// ── Phase: TriggerFired event variant ────────────────────────────────────────
+
+#[test]
+fn trigger_fired_event_roundtrips_via_serde() {
+    use oam::Event;
+
+    let event = Event::trigger_fired(
+        "orders".to_string(),
+        "trg_order_insert".to_string(),
+        "INSERT".to_string(),
+        Some("42".to_string()),
+    );
+
+    assert_eq!(event.event_type(), "TriggerFired");
+
+    let json = serde_json::to_string(&event).expect("serialize");
+    let back: Event = serde_json::from_str(&json).expect("deserialize");
+    assert_eq!(event, back);
+}
+
+#[test]
+fn trigger_fired_event_metadata_contains_required_keys() {
+    use oam::Event;
+
+    let event = Event::trigger_fired(
+        "products".to_string(),
+        "trg_price_check".to_string(),
+        "UPDATE".to_string(),
+        None,
+    );
+
+    let meta = event.metadata();
+    assert_eq!(
+        meta.get("event_type").map(String::as_str),
+        Some("TriggerFired")
+    );
+    assert_eq!(meta.get("table_name").map(String::as_str), Some("products"));
+    assert_eq!(
+        meta.get("trigger_name").map(String::as_str),
+        Some("trg_price_check")
+    );
+    assert_eq!(meta.get("operation").map(String::as_str), Some("UPDATE"));
 }

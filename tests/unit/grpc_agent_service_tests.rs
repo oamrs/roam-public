@@ -125,3 +125,34 @@ async fn test_register_dispatches_session_registered_event() {
         "session_id in event metadata matches response"
     );
 }
+
+#[tokio::test]
+async fn unregister_session_removes_it_from_registry() {
+    let service = GrpcAgentServiceImpl::default();
+
+    let response = service
+        .register(Request::new(ConnectRequest {
+            agent_id: "removal-agent".to_string(),
+            version: "1.0.0".to_string(),
+            mode: SchemaMode::DataFirst.into(),
+        }))
+        .await
+        .expect("register")
+        .into_inner();
+
+    let session_id = response.session_id.clone();
+
+    // Session should exist right after registration
+    assert!(
+        service.registered_session(&session_id).await.is_some(),
+        "session should exist before removal"
+    );
+
+    service.unregister_session(&session_id).await;
+
+    // Session should be gone after removal
+    assert!(
+        service.registered_session(&session_id).await.is_none(),
+        "session should not exist after removal"
+    );
+}
