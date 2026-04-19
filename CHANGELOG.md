@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.5.0](https://github.com/oamrs/roam/compare/oam-v0.4.0...oam-v0.5.0) (2026-04-19)
+
+
+### Features
+
+* Agent Memory in Dolt branches ([ece6c90](https://github.com/oamrs/roam/commit/ece6c90b5cbed1421124d7b008b6232b95b65351))
+
 ## [0.4.0](https://github.com/oamrs/roam/compare/oam-v0.3.0...oam-v0.4.0) (2026-04-18)
 
 
