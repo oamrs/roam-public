@@ -121,10 +121,12 @@ pub struct ValidateQueryRequest {
     pub parameters: HashMap<String, QueryParameter>,
 }
 
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 pub struct ValidationResponse {
     pub valid: bool,
     pub error_message: String,
+    #[serde(default, skip_serializing_if = "HashMap::is_empty")]
+    pub event_metadata: HashMap<String, String>,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -298,14 +300,41 @@ impl QueryServiceImpl {
         policy_context: Option<&PolicyContext>,
         runtime_context: Option<&QueryRuntimeContext>,
     ) -> Result<ValidationResponse, String> {
-        if let Err(error) = self
+        let runtime_augmentation = match self
             .augment_runtime_context(&request.db_identifier, &request.query, runtime_context)
             .await
         {
-            return Ok(ValidationResponse {
-                valid: false,
-                error_message: format!("Runtime context augmentation failed: {error}"),
-            });
+            Ok(aug) => aug,
+            Err(error) => {
+                return Ok(ValidationResponse {
+                    valid: false,
+                    error_message: format!("Runtime context augmentation failed: {error}"),
+                    event_metadata: Default::default(),
+                });
+            }
+        };
+
+        // Dispatch any augmentation audit events so the audit trail is complete even on
+        // validation failures.
+        Self::dispatch_audit_events(runtime_augmentation.as_ref());
+
+        let augmentation_metadata =
+            Self::merged_event_metadata(None, runtime_augmentation.as_ref());
+
+        // Enforce CODE_FIRST schema mode: queries are restricted to the registered table set.
+        // Only applied when schema_mode is CODE_FIRST and table_names are explicitly registered.
+        if let Some(ctx) = runtime_context {
+            if ctx.schema_mode.as_deref() == Some("CODE_FIRST") && !ctx.table_names.is_empty() {
+                if let Some(error_message) =
+                    Self::validate_code_first_table_access(&request.query, &ctx.table_names)
+                {
+                    return Ok(ValidationResponse {
+                        valid: false,
+                        error_message,
+                        event_metadata: augmentation_metadata,
+                    });
+                }
+            }
         }
 
         let db_path = match &self.db_path {
@@ -314,11 +343,57 @@ impl QueryServiceImpl {
                 return Ok(ValidationResponse {
                     valid: false,
                     error_message: "Phase 1A: Query validation not yet implemented".to_string(),
-                })
+                    event_metadata: augmentation_metadata,
+                });
             }
         };
 
-        Self::validate_query_against_db(db_path, &request, policy_context)
+        let mut response = Self::validate_query_against_db(db_path, &request, policy_context)?;
+        // Merge augmentation metadata into the response so callers can include it in events.
+        for (k, v) in augmentation_metadata {
+            response.event_metadata.entry(k).or_insert(v);
+        }
+        Ok(response)
+    }
+
+    /// Checks that the table referenced in the query is within the set of registered tables
+    /// for CODE_FIRST schema mode. Returns an error message if access is denied, or `None`
+    /// if the access is allowed.
+    fn validate_code_first_table_access(query: &str, allowed_tables: &[String]) -> Option<String> {
+        let Some(from_pos) = find_top_level_keyword_position(query, "FROM") else {
+            return None; // No FROM clause — let downstream validation handle it
+        };
+
+        let query_upper = query.to_uppercase();
+        let after_from_upper = query_upper[from_pos + 4..].trim_start();
+        let raw_upper = after_from_upper.split_whitespace().next().unwrap_or("");
+        let trimmed_upper = raw_upper.trim_end_matches(';');
+        let segment_upper = trimmed_upper.rsplit('.').next().unwrap_or(trimmed_upper);
+        let normalized =
+            segment_upper.trim_matches(|c| c == '"' || c == '`' || c == '[' || c == ']');
+
+        let after_from_original = query[from_pos + 4..].trim_start();
+        let raw_original = after_from_original.split_whitespace().next().unwrap_or("");
+        let trimmed_original = raw_original.trim_end_matches(';');
+        let segment_original = trimmed_original
+            .rsplit('.')
+            .next()
+            .unwrap_or(trimmed_original);
+        let display_name =
+            segment_original.trim_matches(|c| c == '"' || c == '`' || c == '[' || c == ']');
+
+        let is_allowed = allowed_tables
+            .iter()
+            .any(|t| t.eq_ignore_ascii_case(normalized));
+
+        if is_allowed {
+            None
+        } else {
+            Some(format!(
+                "Table '{}' is not registered in the schema for CODE_FIRST mode",
+                display_name,
+            ))
+        }
     }
 
     fn validate_query_against_db(
@@ -332,6 +407,7 @@ impl QueryServiceImpl {
             return Ok(ValidationResponse {
                 valid: false,
                 error_message,
+                event_metadata: Default::default(),
             });
         }
 
@@ -339,6 +415,7 @@ impl QueryServiceImpl {
             return Ok(ValidationResponse {
                 valid: false,
                 error_message: "SELECT statements must include a FROM clause".to_string(),
+                event_metadata: Default::default(),
             });
         };
 
@@ -372,12 +449,14 @@ impl QueryServiceImpl {
             return Ok(ValidationResponse {
                 valid: false,
                 error_message: format!("Table '{}' does not exist in schema", display_table_name),
+                event_metadata: Default::default(),
             });
         }
 
         Ok(ValidationResponse {
             valid: true,
             error_message: String::new(),
+            event_metadata: Default::default(),
         })
     }
 
@@ -398,6 +477,7 @@ impl QueryServiceImpl {
             return Ok(ValidationResponse {
                 valid: false,
                 error_message: "SELECT statements must include a FROM clause".to_string(),
+                event_metadata: Default::default(),
             });
         };
 
@@ -431,12 +511,14 @@ impl QueryServiceImpl {
             return Ok(ValidationResponse {
                 valid: false,
                 error_message: format!("Table '{}' does not exist in schema", display_table_name),
+                event_metadata: Default::default(),
             });
         }
 
         Ok(ValidationResponse {
             valid: true,
             error_message: String::new(),
+            event_metadata: Default::default(),
         })
     }
 

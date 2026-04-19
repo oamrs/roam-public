@@ -1,5 +1,6 @@
 use oam::executor::{QueryService, QueryServiceImpl, SchemaService, SchemaServiceImpl};
 use oam::generated::{GetSchemaRequest, GetTableRequest, ValidateQueryRequest};
+use oam::runtime_context::QueryRuntimeContext;
 use tempfile::NamedTempFile;
 
 #[tokio::test]
@@ -1230,4 +1231,141 @@ async fn query_service_events_track_row_count() {
         }
         _ => panic!("Expected QueryExecuted event"),
     }
+}
+
+#[tokio::test]
+async fn validate_query_with_runtime_context_enforces_code_first_schema_mode() {
+    let tmp = NamedTempFile::new().expect("create tmp file");
+    let db_path = tmp.path().to_str().unwrap();
+
+    let conn = rusqlite::Connection::open(db_path).expect("open db");
+    conn.execute(
+        "CREATE TABLE users (id INTEGER PRIMARY KEY, name TEXT NOT NULL)",
+        [],
+    )
+    .expect("create users table");
+    conn.execute(
+        "CREATE TABLE products (id INTEGER PRIMARY KEY, title TEXT NOT NULL)",
+        [],
+    )
+    .expect("create products table");
+    drop(conn);
+
+    let mut validator = QueryServiceImpl::new();
+    validator.set_db_path(db_path).expect("set db path");
+
+    // CODE_FIRST mode with only 'users' registered — 'products' must be rejected
+    let runtime_context = QueryRuntimeContext {
+        schema_mode: Some("CODE_FIRST".to_string()),
+        table_names: vec!["users".to_string()],
+        ..Default::default()
+    };
+
+    let request = ValidateQueryRequest {
+        db_identifier: "test".to_string(),
+        query: "SELECT * FROM products".to_string(),
+        parameters: std::collections::HashMap::new(),
+    };
+
+    let result = validator
+        .validate_query_with_runtime_context(request, runtime_context)
+        .await;
+    assert!(result.is_ok());
+    let response = result.unwrap();
+    assert!(
+        !response.valid,
+        "CODE_FIRST mode should reject query for unregistered table 'products'"
+    );
+    assert!(
+        response.error_message.to_lowercase().contains("products")
+            || response.error_message.to_lowercase().contains("registered")
+            || response.error_message.to_lowercase().contains("schema"),
+        "Error should mention the rejected table or schema restriction, got: {}",
+        response.error_message
+    );
+}
+
+#[tokio::test]
+async fn validate_query_with_runtime_context_allows_registered_table_in_code_first_mode() {
+    let tmp = NamedTempFile::new().expect("create tmp file");
+    let db_path = tmp.path().to_str().unwrap();
+
+    let conn = rusqlite::Connection::open(db_path).expect("open db");
+    conn.execute(
+        "CREATE TABLE users (id INTEGER PRIMARY KEY, name TEXT NOT NULL)",
+        [],
+    )
+    .expect("create users table");
+    drop(conn);
+
+    let mut validator = QueryServiceImpl::new();
+    validator.set_db_path(db_path).expect("set db path");
+
+    // CODE_FIRST mode with 'users' registered — query for 'users' must be allowed
+    let runtime_context = QueryRuntimeContext {
+        schema_mode: Some("CODE_FIRST".to_string()),
+        table_names: vec!["users".to_string()],
+        ..Default::default()
+    };
+
+    let request = ValidateQueryRequest {
+        db_identifier: "test".to_string(),
+        query: "SELECT * FROM users".to_string(),
+        parameters: std::collections::HashMap::new(),
+    };
+
+    let result = validator
+        .validate_query_with_runtime_context(request, runtime_context)
+        .await;
+    assert!(result.is_ok());
+    let response = result.unwrap();
+    assert!(
+        response.valid,
+        "CODE_FIRST mode should allow query for registered table 'users'"
+    );
+}
+
+#[tokio::test]
+async fn validate_query_with_runtime_context_data_first_allows_any_table() {
+    let tmp = NamedTempFile::new().expect("create tmp file");
+    let db_path = tmp.path().to_str().unwrap();
+
+    let conn = rusqlite::Connection::open(db_path).expect("open db");
+    conn.execute(
+        "CREATE TABLE users (id INTEGER PRIMARY KEY, name TEXT NOT NULL)",
+        [],
+    )
+    .expect("create users table");
+    conn.execute(
+        "CREATE TABLE products (id INTEGER PRIMARY KEY, title TEXT NOT NULL)",
+        [],
+    )
+    .expect("create products table");
+    drop(conn);
+
+    let mut validator = QueryServiceImpl::new();
+    validator.set_db_path(db_path).expect("set db path");
+
+    // DATA_FIRST mode — any table in the DB is allowed even if table_names is set
+    let runtime_context = QueryRuntimeContext {
+        schema_mode: Some("DATA_FIRST".to_string()),
+        table_names: vec!["users".to_string()],
+        ..Default::default()
+    };
+
+    let request = ValidateQueryRequest {
+        db_identifier: "test".to_string(),
+        query: "SELECT * FROM products".to_string(),
+        parameters: std::collections::HashMap::new(),
+    };
+
+    let result = validator
+        .validate_query_with_runtime_context(request, runtime_context)
+        .await;
+    assert!(result.is_ok());
+    let response = result.unwrap();
+    assert!(
+        response.valid,
+        "DATA_FIRST mode should allow query for any DB table"
+    );
 }

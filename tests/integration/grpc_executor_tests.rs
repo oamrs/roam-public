@@ -3,7 +3,7 @@ use oam::interceptor::get_event_bus;
 use roam_proto::v1::agent::agent_service_client::AgentServiceClient;
 use roam_proto::v1::agent::{ConnectRequest, SchemaMode};
 use roam_proto::v1::query::query_service_client::QueryServiceClient;
-use roam_proto::v1::query::ExecuteQueryRequest;
+use roam_proto::v1::query::{ExecuteQueryRequest, ValidateQueryRequest};
 use roam_proto::v1::schema::schema_service_client::SchemaServiceClient;
 use roam_proto::v1::schema::GetSchemaRequest;
 use std::path::PathBuf;
@@ -416,6 +416,161 @@ async fn schema_service_handles_requests() {
             // Connection failed, acceptable in test environment
         }
     }
+
+    drop(handle);
+}
+
+#[tokio::test]
+async fn execute_query_validates_code_first_schema_before_executing() {
+    let mut path = PathBuf::from(std::env::temp_dir());
+    path.push("oam_grpc_integration_tests");
+    std::fs::create_dir_all(&path).ok();
+    path.push("code_first_validation_test.db");
+    let db_path = path.to_string_lossy().to_string();
+
+    // Set up a DB with both users and products tables
+    let conn = rusqlite::Connection::open(&db_path).expect("open db");
+    conn.execute_batch(
+        "CREATE TABLE IF NOT EXISTS users (id INTEGER PRIMARY KEY, name TEXT NOT NULL);
+         CREATE TABLE IF NOT EXISTS products (id INTEGER PRIMARY KEY, title TEXT NOT NULL);",
+    )
+    .expect("create tables");
+    drop(conn);
+
+    let executor = GrpcExecutor::new(&db_path).expect("Failed to create GrpcExecutor");
+    let port = get_available_port().expect("Failed to get available port");
+    let addr_str = format!("127.0.0.1:{}", port);
+    let handle = executor
+        .start_server(&addr_str)
+        .await
+        .expect("Failed to start server");
+    tokio::time::sleep(Duration::from_millis(200)).await;
+
+    let addr = format!("http://127.0.0.1:{}", port);
+
+    // Register agent in CODE_FIRST mode
+    let mut agent_client = AgentServiceClient::connect(addr.clone())
+        .await
+        .expect("connect agent client");
+    let register_response = agent_client
+        .register(tonic::Request::new(ConnectRequest {
+            agent_id: "code-first-agent".to_string(),
+            version: "1.0.0".to_string(),
+            mode: SchemaMode::CodeFirst.into(),
+        }))
+        .await
+        .expect("register agent")
+        .into_inner();
+
+    let mut query_client = QueryServiceClient::connect(addr)
+        .await
+        .expect("connect query client");
+
+    // Query for 'products' but only 'users' is in the registered table_names header.
+    // CODE_FIRST mode must reject queries for tables not in the registered schema.
+    let mut request = tonic::Request::new(ExecuteQueryRequest {
+        db_identifier: "code-first-db".to_string(),
+        query: "SELECT * FROM products".to_string(),
+        limit: 10,
+        timeout_seconds: 5,
+    });
+    request.metadata_mut().insert(
+        "x-roam-session-id",
+        register_response.session_id.parse().unwrap(),
+    );
+    request
+        .metadata_mut()
+        .insert("x-roam-table-names", "users".parse().unwrap());
+
+    let response = query_client
+        .execute_query(request)
+        .await
+        .expect("execute query rpc")
+        .into_inner();
+
+    assert_eq!(
+        response.status,
+        oam::executor::QueryStatus::ValidationError as i32,
+        "CODE_FIRST mode must reject query for unregistered table 'products'"
+    );
+    assert!(
+        response.error_message.to_lowercase().contains("products")
+            || response.error_message.to_lowercase().contains("registered")
+            || response.error_message.to_lowercase().contains("schema"),
+        "Error should mention the rejected table or schema restriction, got: {}",
+        response.error_message
+    );
+
+    drop(handle);
+}
+
+#[tokio::test]
+async fn validate_query_rpc_enforces_code_first_schema_mode() {
+    let mut path = PathBuf::from(std::env::temp_dir());
+    path.push("oam_grpc_integration_tests");
+    std::fs::create_dir_all(&path).ok();
+    path.push("code_first_validate_rpc_test.db");
+    let db_path = path.to_string_lossy().to_string();
+
+    let conn = rusqlite::Connection::open(&db_path).expect("open db");
+    conn.execute_batch(
+        "CREATE TABLE IF NOT EXISTS users (id INTEGER PRIMARY KEY, name TEXT NOT NULL);
+         CREATE TABLE IF NOT EXISTS products (id INTEGER PRIMARY KEY, title TEXT NOT NULL);",
+    )
+    .expect("create tables");
+    drop(conn);
+
+    let executor = GrpcExecutor::new(&db_path).expect("Failed to create GrpcExecutor");
+    let port = get_available_port().expect("Failed to get available port");
+    let addr_str = format!("127.0.0.1:{}", port);
+    let handle = executor
+        .start_server(&addr_str)
+        .await
+        .expect("Failed to start server");
+    tokio::time::sleep(Duration::from_millis(200)).await;
+
+    let addr = format!("http://127.0.0.1:{}", port);
+
+    let mut agent_client = AgentServiceClient::connect(addr.clone())
+        .await
+        .expect("connect agent client");
+    let register_response = agent_client
+        .register(tonic::Request::new(ConnectRequest {
+            agent_id: "validate-code-first-agent".to_string(),
+            version: "1.0.0".to_string(),
+            mode: SchemaMode::CodeFirst.into(),
+        }))
+        .await
+        .expect("register agent")
+        .into_inner();
+
+    let mut query_client = QueryServiceClient::connect(addr)
+        .await
+        .expect("connect query client");
+
+    // ValidateQuery for 'products' with only 'users' registered must return not valid
+    let mut request = tonic::Request::new(ValidateQueryRequest {
+        db_identifier: "validate-code-first-db".to_string(),
+        query: "SELECT * FROM products".to_string(),
+    });
+    request.metadata_mut().insert(
+        "x-roam-session-id",
+        register_response.session_id.parse().unwrap(),
+    );
+    request
+        .metadata_mut()
+        .insert("x-roam-table-names", "users".parse().unwrap());
+
+    let response = query_client
+        .validate_query(request)
+        .await
+        .expect("validate query rpc")
+        .into_inner();
+
+    assert!(
+        !response.valid,
+        "CODE_FIRST mode must reject validate_query for unregistered table 'products'"
+    );
 
     drop(handle);
 }
