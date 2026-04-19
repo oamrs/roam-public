@@ -1,6 +1,6 @@
 [package]
 name = "oam"
-version = "0.5.0"
+version = "0.6.0"
 edition = "2021"
 description = "Object Agent Mapping framework for distributed systems and agents"
 license = "MIT OR Apache-2.0"

@@ -1,5 +1,20 @@
 # Changelog
 
+## [0.6.0](https://github.com/oamrs/roam/compare/oam-v0.5.0...oam-v0.6.0) (2026-04-19)
+
+
+### Features
+
+* enforce schema validation in grpc_executor before executing queries ([ca72588](https://github.com/oamrs/roam/commit/ca72588da9256ba3eb3ba3f32507f1e0de382d58))
+* **mirror:** add default_value to Column and non-unique Index support ([17c196d](https://github.com/oamrs/roam/commit/17c196d07fe57cd736515d167107c9017bf571c7))
+* **mirror:** add default_value to Column and non-unique Index support ([bb9f18d](https://github.com/oamrs/roam/commit/bb9f18de9a7b75673e617d387f5c2e727f035907)), closes [#36](https://github.com/oamrs/roam/issues/36)
+
+
+### Bug Fixes
+
+* propagate augmentation event metadata through ValidationResponse ([e4bb405](https://github.com/oamrs/roam/commit/e4bb405bf0cbb018509a5b81d1eaa24efbe26f84))
+* rustfmt formatting and remove registered table list from error message ([924ed08](https://github.com/oamrs/roam/commit/924ed089dc1028fdb26430a1ae8bceb88a53c1a2))
+
 ## [0.5.0](https://github.com/oamrs/roam/compare/oam-v0.4.0...oam-v0.5.0) (2026-04-19)
 
 
