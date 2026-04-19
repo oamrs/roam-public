@@ -79,7 +79,7 @@ pub fn table_to_table_def(table: &crate::mirror::Table) -> TableDef {
         .iter()
         .map(|fm| FieldMappingDef {
             column_name: fm.physical_name.clone(),
-            snake_case_name: fm.logical_name.clone(),
+            logical_name: fm.logical_name.clone(),
             convention: fm.orm_convention.clone(),
         })
         .collect();

@@ -520,7 +520,8 @@ pub fn introspect_sqlite_path(path: &str) -> Result<SchemaModel> {
         })
         .collect::<Result<Vec<_>>>()?;
 
-    let user_defined_types = introspect_user_defined_types(&conn)?;
+    let all_columns: Vec<&Column> = tables.iter().flat_map(|t| t.columns.iter()).collect();
+    let user_defined_types = introspect_user_defined_types(&all_columns);
 
     Ok(SchemaModel {
         tables,
@@ -554,25 +555,39 @@ fn introspect_triggers(conn: &Connection, table: &str) -> Result<Vec<Trigger>> {
 }
 
 fn parse_trigger_timing_event(ddl: &str) -> (String, String) {
-    let upper = ddl.to_uppercase();
-    let timing = if upper.contains("INSTEAD OF") {
-        "INSTEAD OF"
-    } else if upper.contains("BEFORE") {
-        "BEFORE"
+    // Only inspect the trigger header (before BEGIN) so that keywords in the
+    // trigger body (e.g. an UPDATE trigger whose body contains INSERT) cannot
+    // cause misclassification.
+    let begin_re = Regex::new(r"(?i)\bBEGIN\b").expect("valid trigger BEGIN regex");
+    let header = if let Some(m) = begin_re.find(ddl) {
+        &ddl[..m.start()]
     } else {
-        "AFTER"
+        ddl
     };
-    let event = if upper.contains("INSERT") {
-        "INSERT"
-    } else if upper.contains("DELETE") {
-        "DELETE"
-    } else {
-        "UPDATE"
-    };
-    (timing.to_string(), event.to_string())
+    let trigger_re =
+        Regex::new(r"(?i)\b(INSTEAD\s+OF|BEFORE|AFTER)\s+(INSERT|UPDATE|DELETE)\b")
+            .expect("valid trigger timing/event regex");
+    if let Some(caps) = trigger_re.captures(header) {
+        let timing = caps
+            .get(1)
+            .map(|m| {
+                m.as_str()
+                    .split_whitespace()
+                    .collect::<Vec<_>>()
+                    .join(" ")
+                    .to_uppercase()
+            })
+            .unwrap_or_else(|| "AFTER".to_string());
+        let event = caps
+            .get(2)
+            .map(|m| m.as_str().to_uppercase())
+            .unwrap_or_else(|| "UPDATE".to_string());
+        return (timing, event);
+    }
+    ("AFTER".to_string(), "UPDATE".to_string())
 }
 
-fn introspect_user_defined_types(conn: &Connection) -> Result<Vec<UserDefinedType>> {
+fn introspect_user_defined_types(columns: &[&Column]) -> Vec<UserDefinedType> {
     let standard_affinities = [
         "INT",
         "INTEGER",
@@ -596,74 +611,29 @@ fn introspect_user_defined_types(conn: &Connection) -> Result<Vec<UserDefinedTyp
         "DATE",
         "DATETIME",
     ];
-    let sql_keywords = [
-        "PRIMARY",
-        "NOT",
-        "NULL",
-        "DEFAULT",
-        "UNIQUE",
-        "CHECK",
-        "REFERENCES",
-        "FOREIGN",
-        "KEY",
-        "CONSTRAINT",
-        "INDEX",
-        "CREATE",
-        "TABLE",
-        "VIEW",
-        "TRIGGER",
-        "ON",
-        "AS",
-        "END",
-        "BEGIN",
-        "SELECT",
-        "INSERT",
-        "UPDATE",
-        "DELETE",
-        "WHERE",
-        "NEW",
-        "OLD",
-        "RAISE",
-        "ABORT",
-    ];
-
-    let mut stmt =
-        conn.prepare("SELECT sql FROM sqlite_master WHERE type='table' AND sql IS NOT NULL")?;
-    let ddl_rows = stmt
-        .query_map([], |row| row.get::<_, String>(0))?
-        .collect::<Result<Vec<_>, rusqlite::Error>>()?;
 
     let mut seen: HashSet<String> = HashSet::new();
     let mut udts: Vec<UserDefinedType> = Vec::new();
 
-    // Parse column definitions: word followed by a non-keyword type token.
-    // Compiled once outside the loop to satisfy clippy::regex_creation_in_loops.
-    let col_type_re = Regex::new(r"(?i)\b([A-Za-z_][A-Za-z0-9_]*)\s+([A-Za-z_][A-Za-z0-9_]+)")
-        .expect("valid regex");
-
-    for sql in ddl_rows {
-        for caps in col_type_re.captures_iter(&sql) {
-            let type_token = caps[2].trim().to_uppercase();
-            if standard_affinities.iter().any(|a| type_token == *a) {
-                continue;
-            }
-            if sql_keywords.iter().any(|k| type_token == *k) {
-                continue;
-            }
-            if type_token.len() < 2 || seen.contains(&type_token) {
-                continue;
-            }
-            seen.insert(type_token.clone());
-            udts.push(UserDefinedType {
-                name: caps[2].trim().to_string(),
-                base_type: sqlite_type_affinity(&type_token).to_string(),
-                check_constraint: None,
-                nullable: true,
-                default_value: None,
-            });
+    for col in columns {
+        let type_token = col.sql_type.trim().to_uppercase();
+        // Skip empty, standard SQLite affinities, and already-seen types.
+        if type_token.is_empty()
+            || standard_affinities.iter().any(|a| type_token == *a)
+            || seen.contains(&type_token)
+        {
+            continue;
         }
+        seen.insert(type_token.clone());
+        udts.push(UserDefinedType {
+            name: col.sql_type.trim().to_string(),
+            base_type: sqlite_type_affinity(&type_token).to_string(),
+            check_constraint: None,
+            nullable: col.nullable,
+            default_value: col.default_value.clone(),
+        });
     }
-    Ok(udts)
+    udts
 }
 
 fn sqlite_type_affinity(upper_type: &str) -> &'static str {

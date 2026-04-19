@@ -2,7 +2,7 @@ use once_cell::sync::Lazy;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicUsize, Ordering};
-use std::sync::Mutex;
+use std::sync::{Arc, Mutex};
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct CriticalStatusEvent {
@@ -454,7 +454,7 @@ pub struct EventBus {
     subscribers: Mutex<SubscriberMap>,
     type_subscribers: Mutex<TypeSubscriberMap>,
     next_subscriber_id: AtomicUsize,
-    handler_chain: Mutex<Vec<Box<dyn EventHandler>>>,
+    handler_chain: Mutex<Vec<Arc<dyn EventHandler>>>,
 }
 
 impl Default for EventBus {
@@ -544,12 +544,14 @@ impl EventBus {
         }
         drop(type_subs);
 
-        // Walk the chain-of-responsibility handler pipeline
-        let handlers = self
+        // Snapshot Arc pointers under the lock, then drop the lock before
+        // invoking handlers so re-entrant dispatch or registration cannot deadlock.
+        let snapshot: Vec<Arc<dyn EventHandler>> = self
             .handler_chain
             .lock()
-            .map_err(|e| format!("Failed to acquire lock: {}", e))?;
-        for handler in handlers.iter() {
+            .map_err(|e| format!("Failed to acquire lock: {}", e))?
+            .clone();
+        for handler in &snapshot {
             if handler.handle(event) == HandleOutcome::Stop {
                 break;
             }
@@ -566,7 +568,7 @@ impl EventBus {
         self.handler_chain
             .lock()
             .map_err(|e| format!("Failed to acquire lock: {}", e))?
-            .push(handler);
+            .push(Arc::from(handler));
         Ok(())
     }
 
