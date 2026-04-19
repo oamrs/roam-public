@@ -5,6 +5,7 @@ use crate::executor::{
 };
 use crate::interceptor::{get_event_bus, Event as DomainEvent};
 use crate::runtime_context::QueryRuntimeContext;
+use chrono::Utc;
 use roam_proto::v1::agent::SchemaMode;
 use std::collections::HashMap;
 use std::pin::Pin;
@@ -273,9 +274,6 @@ impl ProtoQueryService for GrpcQueryServiceImpl {
             .map_err(Status::internal)?;
 
         if !validation.valid {
-            use crate::interceptor::{get_event_bus, Event as DomainEvent};
-            use chrono::Utc;
-
             let timestamp = Utc::now().to_rfc3339();
             let event = DomainEvent::query_validation_failed(
                 exec_req.db_identifier.clone(),

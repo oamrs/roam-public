@@ -349,21 +349,16 @@ impl QueryServiceImpl {
 
         let query_upper = query.to_uppercase();
         let after_from_upper = query_upper[from_pos + 4..].trim_start();
-        let raw_token_upper = after_from_upper.split_whitespace().next().unwrap_or("");
-        let raw_token_upper = raw_token_upper.trim_end_matches(';');
-        let last_segment_upper = raw_token_upper.rsplit('.').next().unwrap_or(raw_token_upper);
-        let normalized = last_segment_upper
-            .trim_matches(|c| c == '"' || c == '`' || c == '[' || c == ']');
+        let raw_upper = after_from_upper.split_whitespace().next().unwrap_or("");
+        let trimmed_upper = raw_upper.trim_end_matches(';');
+        let segment_upper = trimmed_upper.rsplit('.').next().unwrap_or(trimmed_upper);
+        let normalized = segment_upper.trim_matches(|c| c == '"' || c == '`' || c == '[' || c == ']');
 
         let after_from_original = query[from_pos + 4..].trim_start();
-        let raw_token_original = after_from_original.split_whitespace().next().unwrap_or("");
-        let raw_token_original = raw_token_original.trim_end_matches(';');
-        let last_segment_original = raw_token_original
-            .rsplit('.')
-            .next()
-            .unwrap_or(raw_token_original);
-        let display_name = last_segment_original
-            .trim_matches(|c| c == '"' || c == '`' || c == '[' || c == ']');
+        let raw_original = after_from_original.split_whitespace().next().unwrap_or("");
+        let trimmed_original = raw_original.trim_end_matches(';');
+        let segment_original = trimmed_original.rsplit('.').next().unwrap_or(trimmed_original);
+        let display_name = segment_original.trim_matches(|c| c == '"' || c == '`' || c == '[' || c == ']');
 
         let is_allowed = allowed_tables
             .iter()
