@@ -845,3 +845,129 @@ fn json_schema_multi_unique_in_table_description() {
         json_str
     );
 }
+
+#[test]
+fn sqlite_detects_default_value() {
+    let tmp = NamedTempFile::new().expect("create tmp file");
+    let path = tmp.path().to_str().unwrap().to_string();
+
+    let conn = Connection::open(&path).expect("open tmp db");
+    conn.execute_batch(
+        "CREATE TABLE users (
+            id INTEGER PRIMARY KEY,
+            status TEXT NOT NULL DEFAULT 'active',
+            score INTEGER DEFAULT 0
+        );",
+    )
+    .expect("create table");
+    drop(conn);
+
+    let schema = oam::introspect_sqlite_path(&path).expect("introspect");
+    let table = schema
+        .tables
+        .iter()
+        .find(|t| t.name == "users")
+        .expect("users table exists");
+
+    let status_col = table
+        .columns
+        .iter()
+        .find(|c| c.name == "status")
+        .expect("status column exists");
+    assert_eq!(
+        status_col.default_value,
+        Some("'active'".to_string()),
+        "status default_value should be \"'active'\""
+    );
+
+    let score_col = table
+        .columns
+        .iter()
+        .find(|c| c.name == "score")
+        .expect("score column exists");
+    assert_eq!(
+        score_col.default_value,
+        Some("0".to_string()),
+        "score default_value should be \"0\""
+    );
+
+    let id_col = table
+        .columns
+        .iter()
+        .find(|c| c.name == "id")
+        .expect("id column exists");
+    assert_eq!(
+        id_col.default_value, None,
+        "id should have no default value"
+    );
+}
+
+#[test]
+fn sqlite_detects_non_unique_index() {
+    let tmp = NamedTempFile::new().expect("create tmp file");
+    let path = tmp.path().to_str().unwrap().to_string();
+
+    let conn = Connection::open(&path).expect("open tmp db");
+    conn.execute_batch(
+        "CREATE TABLE orders (
+            id INTEGER PRIMARY KEY,
+            user_id INTEGER NOT NULL,
+            status TEXT NOT NULL
+        );
+        CREATE INDEX idx_orders_user_id ON orders (user_id);
+        CREATE INDEX idx_orders_status ON orders (status);",
+    )
+    .expect("create table and indexes");
+    drop(conn);
+
+    let schema = oam::introspect_sqlite_path(&path).expect("introspect");
+    let table = schema
+        .tables
+        .iter()
+        .find(|t| t.name == "orders")
+        .expect("orders table exists");
+
+    assert!(
+        table
+            .indexes
+            .iter()
+            .any(|i| i.name == "idx_orders_user_id" && i.columns == vec!["user_id".to_string()]),
+        "expected idx_orders_user_id in indexes, got: {:?}",
+        table.indexes
+    );
+    assert!(
+        table
+            .indexes
+            .iter()
+            .any(|i| i.name == "idx_orders_status" && i.columns == vec!["status".to_string()]),
+        "expected idx_orders_status in indexes, got: {:?}",
+        table.indexes
+    );
+    assert!(
+        table.unique_indexes.is_empty(),
+        "expected no unique indexes, got: {:?}",
+        table.unique_indexes
+    );
+}
+
+#[test]
+fn json_schema_column_description_includes_default_value() {
+    let tmp = NamedTempFile::new().expect("create tmp file");
+    let path = tmp.path().to_str().unwrap().to_string();
+
+    let conn = Connection::open(&path).expect("open tmp db");
+    conn.execute_batch(
+        "CREATE TABLE widgets (id INTEGER PRIMARY KEY, color TEXT NOT NULL DEFAULT 'red');",
+    )
+    .expect("create table");
+    drop(conn);
+
+    let schema = oam::introspect_sqlite_path(&path).expect("introspect");
+    let json_str = serde_json::to_string(&schema.to_json_schema()).expect("to json");
+
+    assert!(
+        json_str.contains("Default:"),
+        "column description must include 'Default:', got schema: {}",
+        json_str
+    );
+}

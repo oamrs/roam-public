@@ -26,7 +26,7 @@ pub use interceptor::{
 };
 pub use mapper::{GrpcMapper, LocalMapper, Mapper, TcpMapper};
 pub use mirror::{
-    introspect_sqlite_path, Column, CompositeForeignKey, ForeignKey, SchemaModel, Table,
+    introspect_sqlite_path, Column, CompositeForeignKey, ForeignKey, Index, SchemaModel, Table,
     UniqueIndex,
 };
 pub use policy_engine::{

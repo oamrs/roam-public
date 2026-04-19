@@ -15,6 +15,7 @@ pub struct Column {
     pub sql_type: String,
     pub nullable: bool,
     pub primary_key: bool,
+    pub default_value: Option<String>,
     pub enum_values: Option<Vec<String>>,
 }
 
@@ -27,12 +28,21 @@ pub struct UniqueIndex {
 }
 
 #[derive(Debug, Serialize, Deserialize, JsonSchema, PartialEq)]
+pub struct Index {
+    /// Name of the index as recorded in the database
+    pub name: String,
+    /// Ordered list of column names covered by this index
+    pub columns: Vec<String>,
+}
+
+#[derive(Debug, Serialize, Deserialize, JsonSchema, PartialEq)]
 pub struct Table {
     pub name: String,
     pub columns: Vec<Column>,
     pub foreign_keys: Vec<ForeignKey>,
     pub composite_foreign_keys: Vec<CompositeForeignKey>,
     pub unique_indexes: Vec<UniqueIndex>,
+    pub indexes: Vec<Index>,
 }
 
 #[derive(Debug, Serialize, Deserialize, JsonSchema, PartialEq)]
@@ -143,6 +153,9 @@ fn build_column_description(
     }
     if single_unique_set.contains(col.name.as_str()) {
         desc.push_str(" | UNIQUE — value must be unique across all rows");
+    }
+    if let Some(ref default) = col.default_value {
+        desc.push_str(&format!(" | Default: {}", default));
     }
     if col.enum_values.is_some() {
         desc.push_str(" | Constrained by CHECK IN (enum values)");
@@ -273,12 +286,14 @@ fn introspect_columns(conn: &Connection, table: &str) -> Result<Vec<Column>> {
             let name: String = row.get(1)?;
             let sql_type: String = row.get(2)?;
             let notnull: i32 = row.get(3)?;
+            let default_value: Option<String> = row.get(4)?;
             let pk: i32 = row.get(5)?;
             Ok(Column {
                 name,
                 sql_type,
                 nullable: notnull == 0,
                 primary_key: pk != 0,
+                default_value,
                 enum_values: None,
             })
         })?
@@ -396,7 +411,7 @@ fn sqlite_quote_ident(name: &str) -> String {
     format!("\"{}\"", name.replace('"', "\"\""))
 }
 
-fn introspect_unique_indexes(conn: &Connection, table: &str) -> Result<Vec<UniqueIndex>> {
+fn introspect_indexes(conn: &Connection, table: &str) -> Result<(Vec<UniqueIndex>, Vec<Index>)> {
     let mut idx_list_stmt =
         conn.prepare(&format!("PRAGMA index_list({})", sqlite_quote_ident(table)))?;
     let index_rows = idx_list_stmt
@@ -410,11 +425,15 @@ fn introspect_unique_indexes(conn: &Connection, table: &str) -> Result<Vec<Uniqu
         .collect::<Result<Vec<_>, rusqlite::Error>>()?;
 
     let mut unique_indexes: Vec<UniqueIndex> = Vec::new();
+    let mut indexes: Vec<Index> = Vec::new();
     for (idx_name, unique, origin, partial) in index_rows {
-        if unique != 1 || origin == "pk" || partial != 0 {
+        if partial != 0 || origin == "pk" {
             continue;
         }
-        let mut idx_info_stmt = conn.prepare(&format!("PRAGMA index_info('{}')", idx_name))?;
+        let mut idx_info_stmt = conn.prepare(&format!(
+            "PRAGMA index_info({})",
+            sqlite_quote_ident(&idx_name)
+        ))?;
         let mut col_rows = idx_info_stmt
             .query_map([], |row| {
                 let seqno: i32 = row.get(0)?;
@@ -424,14 +443,22 @@ fn introspect_unique_indexes(conn: &Connection, table: &str) -> Result<Vec<Uniqu
             .collect::<Result<Vec<_>, rusqlite::Error>>()?;
         col_rows.sort_by_key(|r| r.0);
         let columns: Vec<String> = col_rows.into_iter().map(|r| r.1).collect();
-        if !columns.is_empty() {
+        if columns.is_empty() {
+            continue;
+        }
+        if unique == 1 {
             unique_indexes.push(UniqueIndex {
+                name: idx_name,
+                columns,
+            });
+        } else if origin == "c" {
+            indexes.push(Index {
                 name: idx_name,
                 columns,
             });
         }
     }
-    Ok(unique_indexes)
+    Ok((unique_indexes, indexes))
 }
 
 pub fn introspect_sqlite_path(path: &str) -> Result<SchemaModel> {
@@ -448,13 +475,14 @@ pub fn introspect_sqlite_path(path: &str) -> Result<SchemaModel> {
         .map(|t| {
             let columns = introspect_columns(&conn, &t)?;
             let (foreign_keys, composite_foreign_keys) = introspect_foreign_keys(&conn, &t)?;
-            let unique_indexes = introspect_unique_indexes(&conn, &t)?;
+            let (unique_indexes, indexes) = introspect_indexes(&conn, &t)?;
             Ok(Table {
                 name: t,
                 columns,
                 foreign_keys,
                 composite_foreign_keys,
                 unique_indexes,
+                indexes,
             })
         })
         .collect::<Result<Vec<_>>>()?;
