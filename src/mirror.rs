@@ -564,9 +564,8 @@ fn parse_trigger_timing_event(ddl: &str) -> (String, String) {
     } else {
         ddl
     };
-    let trigger_re =
-        Regex::new(r"(?i)\b(INSTEAD\s+OF|BEFORE|AFTER)\s+(INSERT|UPDATE|DELETE)\b")
-            .expect("valid trigger timing/event regex");
+    let trigger_re = Regex::new(r"(?i)\b(INSTEAD\s+OF|BEFORE|AFTER)\s+(INSERT|UPDATE|DELETE)\b")
+        .expect("valid trigger timing/event regex");
     if let Some(caps) = trigger_re.captures(header) {
         let timing = caps
             .get(1)
