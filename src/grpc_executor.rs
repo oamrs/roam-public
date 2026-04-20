@@ -98,6 +98,7 @@ pub struct GrpcExecutor {
     schema_service: Arc<Mutex<SchemaServiceImpl>>,
     sessions: Arc<SessionRegistry>,
     runtime_augmentor: Option<Arc<dyn QueryRuntimeAugmentor>>,
+    access_enforcer: Option<Arc<crate::access_policy::AccessEnforcer>>,
 }
 
 /// Basic implementation of AgentService for registration and event streaming
@@ -255,11 +256,20 @@ impl GrpcExecutor {
             schema_service: Arc::new(Mutex::new(schema_service)),
             sessions: Arc::new(SessionRegistry::default()),
             runtime_augmentor: None,
+            access_enforcer: None,
         })
     }
 
     pub fn with_runtime_augmentor(mut self, augmentor: Arc<dyn QueryRuntimeAugmentor>) -> Self {
         self.runtime_augmentor = Some(augmentor);
+        self
+    }
+
+    pub fn with_access_enforcer(
+        mut self,
+        enforcer: Arc<crate::access_policy::AccessEnforcer>,
+    ) -> Self {
+        self.access_enforcer = Some(enforcer);
         self
     }
 
@@ -272,6 +282,11 @@ impl GrpcExecutor {
         if let Some(augmentor) = self.runtime_augmentor.clone() {
             let mut query_service = self.query_service.lock().await;
             query_service.set_runtime_augmentor(augmentor);
+        }
+
+        if let Some(enforcer) = self.access_enforcer.clone() {
+            let mut query_service = self.query_service.lock().await;
+            query_service.set_access_enforcer(enforcer);
         }
 
         let query_svc = GrpcQueryServiceImpl {

@@ -105,6 +105,40 @@ pub enum Event {
         row_id: Option<String>,
         timestamp: String,
     },
+    /// Emitted when row-level security rewrote a query to filter rows.
+    #[serde(rename = "RowsFiltered")]
+    RowsFiltered {
+        db_identifier: String,
+        table_name: String,
+        user_id: String,
+        timestamp: String,
+        #[serde(default, skip_serializing_if = "HashMap::is_empty")]
+        context: HashMap<String, String>,
+    },
+    /// Emitted when column-level security rewrote a `SELECT *` to exclude
+    /// restricted columns.
+    #[serde(rename = "ColumnsRedacted")]
+    ColumnsRedacted {
+        db_identifier: String,
+        table_name: String,
+        user_id: String,
+        /// Names of the columns that were removed from the query.
+        redacted_columns: Vec<String>,
+        timestamp: String,
+        #[serde(default, skip_serializing_if = "HashMap::is_empty")]
+        context: HashMap<String, String>,
+    },
+    /// Emitted when a query was blocked entirely by an access policy.
+    #[serde(rename = "AccessDenied")]
+    AccessDenied {
+        db_identifier: String,
+        query: String,
+        user_id: String,
+        reason: String,
+        timestamp: String,
+        #[serde(default, skip_serializing_if = "HashMap::is_empty")]
+        context: HashMap<String, String>,
+    },
 }
 
 impl Event {
@@ -255,6 +289,55 @@ impl Event {
         }
     }
 
+    pub fn rows_filtered(
+        db_identifier: String,
+        table_name: String,
+        user_id: String,
+        context: HashMap<String, String>,
+    ) -> Self {
+        Event::RowsFiltered {
+            db_identifier,
+            table_name,
+            user_id,
+            timestamp: chrono::Utc::now().to_rfc3339(),
+            context,
+        }
+    }
+
+    pub fn columns_redacted(
+        db_identifier: String,
+        table_name: String,
+        user_id: String,
+        redacted_columns: Vec<String>,
+        context: HashMap<String, String>,
+    ) -> Self {
+        Event::ColumnsRedacted {
+            db_identifier,
+            table_name,
+            user_id,
+            redacted_columns,
+            timestamp: chrono::Utc::now().to_rfc3339(),
+            context,
+        }
+    }
+
+    pub fn access_denied(
+        db_identifier: String,
+        query: String,
+        user_id: String,
+        reason: String,
+        context: HashMap<String, String>,
+    ) -> Self {
+        Event::AccessDenied {
+            db_identifier,
+            query,
+            user_id,
+            reason,
+            timestamp: chrono::Utc::now().to_rfc3339(),
+            context,
+        }
+    }
+
     pub fn event_type(&self) -> &str {
         match self {
             Event::StatusChange { .. } => "StatusChange",
@@ -267,6 +350,9 @@ impl Event {
             Event::ModelChanged { .. } => "ModelChanged",
             Event::SessionRegistered { .. } => "SessionRegistered",
             Event::TriggerFired { .. } => "TriggerFired",
+            Event::RowsFiltered { .. } => "RowsFiltered",
+            Event::ColumnsRedacted { .. } => "ColumnsRedacted",
+            Event::AccessDenied { .. } => "AccessDenied",
         }
     }
 
@@ -411,6 +497,49 @@ impl Event {
                     map.insert("row_id".to_string(), id.clone());
                 }
                 map.insert("timestamp".to_string(), timestamp.clone());
+            }
+            Event::RowsFiltered {
+                db_identifier,
+                table_name,
+                user_id,
+                timestamp,
+                context,
+            } => {
+                map.insert("db_identifier".to_string(), db_identifier.clone());
+                map.insert("table_name".to_string(), table_name.clone());
+                map.insert("user_id".to_string(), user_id.clone());
+                map.insert("timestamp".to_string(), timestamp.clone());
+                Self::insert_context_metadata(&mut map, context);
+            }
+            Event::ColumnsRedacted {
+                db_identifier,
+                table_name,
+                user_id,
+                redacted_columns,
+                timestamp,
+                context,
+            } => {
+                map.insert("db_identifier".to_string(), db_identifier.clone());
+                map.insert("table_name".to_string(), table_name.clone());
+                map.insert("user_id".to_string(), user_id.clone());
+                map.insert("redacted_columns".to_string(), redacted_columns.join(","));
+                map.insert("timestamp".to_string(), timestamp.clone());
+                Self::insert_context_metadata(&mut map, context);
+            }
+            Event::AccessDenied {
+                db_identifier,
+                query,
+                user_id,
+                reason,
+                timestamp,
+                context,
+            } => {
+                map.insert("db_identifier".to_string(), db_identifier.clone());
+                map.insert("query".to_string(), query.clone());
+                map.insert("user_id".to_string(), user_id.clone());
+                map.insert("reason".to_string(), reason.clone());
+                map.insert("timestamp".to_string(), timestamp.clone());
+                Self::insert_context_metadata(&mut map, context);
             }
         }
 

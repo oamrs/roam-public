@@ -61,7 +61,7 @@ pub struct FieldMapping {
     pub notes: Option<String>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, PartialEq)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize, JsonSchema, PartialEq)]
 pub struct Table {
     pub name: String,
     pub columns: Vec<Column>,

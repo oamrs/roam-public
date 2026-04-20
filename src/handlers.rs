@@ -129,6 +129,68 @@ impl EventHandler for SessionActivityHandler {
     }
 }
 
+// ── DataAccessEnforcedHandler ─────────────────────────────────────────────────
+
+/// Tracks counts of data-access enforcement events emitted by RLS/CLS.
+///
+/// Counters are exposed atomically; obtain a snapshot via
+/// [`DataAccessEnforcedHandler::snapshot`].
+pub struct DataAccessEnforcedHandler {
+    pub rows_filtered: AtomicUsize,
+    pub columns_redacted: AtomicUsize,
+    pub access_denied: AtomicUsize,
+}
+
+impl DataAccessEnforcedHandler {
+    pub fn new() -> Self {
+        Self {
+            rows_filtered: AtomicUsize::new(0),
+            columns_redacted: AtomicUsize::new(0),
+            access_denied: AtomicUsize::new(0),
+        }
+    }
+
+    pub fn snapshot(&self) -> DataAccessSnapshot {
+        DataAccessSnapshot {
+            rows_filtered: self.rows_filtered.load(Ordering::Relaxed),
+            columns_redacted: self.columns_redacted.load(Ordering::Relaxed),
+            access_denied: self.access_denied.load(Ordering::Relaxed),
+        }
+    }
+}
+
+impl Default for DataAccessEnforcedHandler {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+/// Point-in-time copy of the atomic counters in [`DataAccessEnforcedHandler`].
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DataAccessSnapshot {
+    pub rows_filtered: usize,
+    pub columns_redacted: usize,
+    pub access_denied: usize,
+}
+
+impl EventHandler for DataAccessEnforcedHandler {
+    fn handle(&self, event: &Event) -> HandleOutcome {
+        match event {
+            Event::RowsFiltered { .. } => {
+                self.rows_filtered.fetch_add(1, Ordering::Relaxed);
+            }
+            Event::ColumnsRedacted { .. } => {
+                self.columns_redacted.fetch_add(1, Ordering::Relaxed);
+            }
+            Event::AccessDenied { .. } => {
+                self.access_denied.fetch_add(1, Ordering::Relaxed);
+            }
+            _ => {}
+        }
+        HandleOutcome::Continue
+    }
+}
+
 // ── DefaultHandlerChain ───────────────────────────────────────────────────────
 
 /// Shared, arc-wrapped metrics and activity handles bundled together so the
@@ -138,6 +200,7 @@ impl EventHandler for SessionActivityHandler {
 pub struct DefaultHandlerChain {
     pub query_metrics: Arc<QueryMetricsHandler>,
     pub session_activity: Arc<SessionActivityHandler>,
+    pub data_access: Arc<DataAccessEnforcedHandler>,
 }
 
 impl DefaultHandlerChain {
@@ -145,6 +208,7 @@ impl DefaultHandlerChain {
         Self {
             query_metrics: Arc::new(QueryMetricsHandler::new()),
             session_activity: Arc::new(SessionActivityHandler::new()),
+            data_access: Arc::new(DataAccessEnforcedHandler::new()),
         }
     }
 }

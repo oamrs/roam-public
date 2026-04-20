@@ -1,3 +1,4 @@
+use crate::access_policy::{AccessEnforcer, EnforcementOutcome};
 use crate::mirror::SchemaModel;
 use crate::policy_engine::{PolicyContext, PolicyEngine, ToolIntent};
 use crate::runtime_context::QueryRuntimeContext;
@@ -258,6 +259,7 @@ impl SchemaService for SchemaServiceImpl {
 pub struct QueryServiceImpl {
     db_path: Option<String>,
     runtime_augmentor: Option<Arc<dyn QueryRuntimeAugmentor>>,
+    access_enforcer: Option<Arc<AccessEnforcer>>,
 }
 
 impl QueryServiceImpl {
@@ -265,6 +267,7 @@ impl QueryServiceImpl {
         Self {
             db_path: None,
             runtime_augmentor: None,
+            access_enforcer: None,
         }
     }
 
@@ -275,6 +278,10 @@ impl QueryServiceImpl {
 
     pub fn set_runtime_augmentor(&mut self, augmentor: Arc<dyn QueryRuntimeAugmentor>) {
         self.runtime_augmentor = Some(augmentor);
+    }
+
+    pub fn set_access_enforcer(&mut self, enforcer: Arc<AccessEnforcer>) {
+        self.access_enforcer = Some(enforcer);
     }
 
     fn evaluate_policy(query: &str, policy_context: Option<&PolicyContext>) -> Option<String> {
@@ -585,9 +592,32 @@ impl QueryServiceImpl {
                 .await;
         }
 
+        let effective_query = match self
+            .apply_enforcement(
+                &request,
+                db_path,
+                runtime_context,
+                runtime_augmentation.as_ref(),
+            )
+            .await
+        {
+            Ok(q) => q,
+            Err(reason) => {
+                return self
+                    .build_validation_error_response(
+                        &request,
+                        format!("Access denied: {reason}"),
+                        start_time,
+                        runtime_context,
+                        runtime_augmentation.as_ref(),
+                    )
+                    .await;
+            }
+        };
+
         let execution_result = execute_query_on_database_async(
             db_path,
-            &request.query,
+            &effective_query,
             request.limit,
             request.timeout_seconds,
         )
@@ -821,6 +851,80 @@ impl QueryServiceImpl {
             timestamp,
         })
     }
+
+    async fn apply_enforcement(
+        &self,
+        request: &ExecuteQueryRequest,
+        db_path: &str,
+        runtime_context: Option<&QueryRuntimeContext>,
+        runtime_augmentation: Option<&QueryRuntimeAugmentation>,
+    ) -> Result<String, String> {
+        match (&self.access_enforcer, runtime_context) {
+            (Some(enforcer), Some(rtx)) => {
+                Self::run_enforcement(enforcer, request, db_path, rtx, runtime_augmentation).await
+            }
+            _ => Ok(request.query.clone()),
+        }
+    }
+
+    async fn run_enforcement(
+        enforcer: &AccessEnforcer,
+        request: &ExecuteQueryRequest,
+        db_path: &str,
+        rtx: &QueryRuntimeContext,
+        runtime_augmentation: Option<&QueryRuntimeAugmentation>,
+    ) -> Result<String, String> {
+        use crate::interceptor::{get_event_bus, Event};
+        use crate::mirror::introspect_sqlite_path;
+
+        let schema: Option<SchemaModel> = introspect_sqlite_path(db_path).ok();
+        let outcome = enforcer.enforce(&request.query, rtx, schema.as_ref()).await;
+
+        match outcome {
+            EnforcementOutcome::Allow => Ok(request.query.clone()),
+            EnforcementOutcome::Rewrite {
+                sql,
+                ref redacted_columns,
+            } => {
+                let table =
+                    crate::access_policy::extract_query_table(&request.query).unwrap_or_default();
+                let user_id = rtx.user_id.clone().unwrap_or_default();
+                let ctx = Self::merged_event_metadata(Some(rtx), runtime_augmentation);
+
+                if !redacted_columns.is_empty() {
+                    let ev = Event::columns_redacted(
+                        request.db_identifier.clone(),
+                        table.clone(),
+                        user_id.clone(),
+                        redacted_columns.clone(),
+                        ctx.clone(),
+                    );
+                    let _ = get_event_bus().dispatch_generic(&ev);
+                }
+
+                if sql.contains("_roam_rls") {
+                    let ev =
+                        Event::rows_filtered(request.db_identifier.clone(), table, user_id, ctx);
+                    let _ = get_event_bus().dispatch_generic(&ev);
+                }
+
+                Ok(sql)
+            }
+            EnforcementOutcome::Deny { reason } => {
+                let user_id = rtx.user_id.clone().unwrap_or_default();
+                let ctx = Self::merged_event_metadata(Some(rtx), runtime_augmentation);
+                let ev = Event::access_denied(
+                    request.db_identifier.clone(),
+                    request.query.clone(),
+                    user_id,
+                    reason.clone(),
+                    ctx,
+                );
+                let _ = get_event_bus().dispatch_generic(&ev);
+                Err(reason)
+            }
+        }
+    }
 }
 
 impl Default for QueryServiceImpl {
@@ -876,7 +980,7 @@ async fn execute_query_on_database_async(
     }
 }
 
-fn find_top_level_keyword_position(query: &str, keyword: &str) -> Option<usize> {
+pub(crate) fn find_top_level_keyword_position(query: &str, keyword: &str) -> Option<usize> {
     let chars: Vec<(usize, char)> = query.char_indices().collect();
     let mut index = 0;
     let mut depth = 0usize;

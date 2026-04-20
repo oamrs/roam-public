@@ -1,3 +1,4 @@
+pub mod access_policy;
 pub mod execution_engine;
 pub mod executor;
 pub mod ffi;
@@ -12,6 +13,9 @@ pub mod runtime_context;
 pub mod tcp;
 
 // Re-export commonly used types
+pub use access_policy::{
+    AccessEnforcer, AccessPolicy, AccessPolicyProvider, ColumnPolicy, EnforcementOutcome, RowPolicy,
+};
 pub use execution_engine::{
     CancellationToken, ConnectionPool, ExecutionEngine, ExecutionMetrics, PoolStats, QueryPriority,
     QueryRequest, QueryResult, ResultStatus,
@@ -22,8 +26,8 @@ pub use executor::{
 };
 pub use grpc_executor::GrpcExecutor;
 pub use handlers::{
-    AuditLogHandler, DefaultHandlerChain, QueryMetricsHandler, QueryMetricsSnapshot,
-    SessionActivityHandler, SharedHandler,
+    AuditLogHandler, DataAccessEnforcedHandler, DataAccessSnapshot, DefaultHandlerChain,
+    QueryMetricsHandler, QueryMetricsSnapshot, SessionActivityHandler, SharedHandler,
 };
 pub use interceptor::{
     get_event_bus, CriticalModelBehavior, CriticalStatusEvent, Event, EventBus, EventHandler,
