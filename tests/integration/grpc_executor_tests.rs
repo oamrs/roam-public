@@ -1,11 +1,11 @@
 use oam::grpc_executor::GrpcExecutor;
 use oam::interceptor::get_event_bus;
-use roam_proto::v1::agent::agent_service_client::AgentServiceClient;
-use roam_proto::v1::agent::{ConnectRequest, SchemaMode};
-use roam_proto::v1::query::query_service_client::QueryServiceClient;
-use roam_proto::v1::query::{ExecuteQueryRequest, ValidateQueryRequest};
-use roam_proto::v1::schema::schema_service_client::SchemaServiceClient;
-use roam_proto::v1::schema::GetSchemaRequest;
+use oam_proto::v1::agent::agent_service_client::AgentServiceClient;
+use oam_proto::v1::agent::{ConnectRequest, SchemaMode};
+use oam_proto::v1::query::query_service_client::QueryServiceClient;
+use oam_proto::v1::query::{ExecuteQueryRequest, ValidateQueryRequest};
+use oam_proto::v1::schema::schema_service_client::SchemaServiceClient;
+use oam_proto::v1::schema::GetSchemaRequest;
 use std::path::PathBuf;
 use std::time::Duration;
 

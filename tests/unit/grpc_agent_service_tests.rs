@@ -1,6 +1,6 @@
 use oam::grpc_executor::GrpcAgentServiceImpl;
 use oam::interceptor::{get_event_bus, Event as DomainEvent};
-use roam_proto::v1::agent::{
+use oam_proto::v1::agent::{
     agent_service_server::AgentService, ConnectRequest, EventStreamRequest, SchemaMode,
 };
 use serial_test::serial;

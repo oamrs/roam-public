@@ -103,7 +103,7 @@ impl Mapper for LocalMapper {
 #[derive(Clone, Debug)]
 pub struct GrpcMapper {
     query_client:
-        roam_proto::v1::query::query_service_client::QueryServiceClient<tonic::transport::Channel>,
+        oam_proto::v1::query::query_service_client::QueryServiceClient<tonic::transport::Channel>,
 }
 
 impl GrpcMapper {
@@ -115,7 +115,7 @@ impl GrpcMapper {
             .map_err(|e| format!("Failed to connect to gRPC server: {}", e))?;
 
         let query_client =
-            roam_proto::v1::query::query_service_client::QueryServiceClient::new(channel);
+            oam_proto::v1::query::query_service_client::QueryServiceClient::new(channel);
 
         Ok(Self { query_client })
     }
@@ -129,7 +129,7 @@ impl Mapper for GrpcMapper {
     ) -> Result<ValidationResponse, String> {
         let mut client = self.query_client.clone();
 
-        let proto_request = roam_proto::v1::query::ValidateQueryRequest {
+        let proto_request = oam_proto::v1::query::ValidateQueryRequest {
             db_identifier: request.db_identifier,
             query: request.query,
         };
@@ -153,7 +153,7 @@ impl Mapper for GrpcMapper {
     ) -> Result<ExecuteQueryResponse, String> {
         let mut client = self.query_client.clone();
 
-        let proto_request = roam_proto::v1::query::ExecuteQueryRequest {
+        let proto_request = oam_proto::v1::query::ExecuteQueryRequest {
             db_identifier: request.db_identifier,
             query: request.query,
             limit: request.limit,
