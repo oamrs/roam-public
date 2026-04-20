@@ -1,5 +1,23 @@
 # Changelog
 
+## [0.7.0](https://github.com/oamrs/roam/compare/oam-v0.6.0...oam-v0.7.0) (2026-04-20)
+
+
+### Features
+
+* OrgRateLimitProvider, SchemaModePolicy, AgentSessionPolicy moat traits ([93bb7dd](https://github.com/oamrs/roam/commit/93bb7ddbdea20584566229b2628e3c80cd33000e))
+* ORM metadata introspection + E2E Dolt branch isolation ([07809ba](https://github.com/oamrs/roam/commit/07809ba9f975f8d69b1443e650c07b253be54de9))
+* ORM metadata introspection + E2E Dolt branch isolation ([bc33ca6](https://github.com/oamrs/roam/commit/bc33ca636809beb43bebc36145dddcc9dbbad8ec))
+* RLS/CLS authorization middleware with DoltPolicyProvider ([4796b1d](https://github.com/oamrs/roam/commit/4796b1dc649386b07880c2e96e6764d253fa67e9))
+* RLS/CLS authorization middleware with DoltPolicyProvider ([ee51c0f](https://github.com/oamrs/roam/commit/ee51c0fbb4455c670dd85fef0de5db2ca2d09825))
+* widen open-core moat — AgentMemory, AuditExporter, PolicyPlugin, ApprovalGate, IdentityProvider traits ([c2e2f1c](https://github.com/oamrs/roam/commit/c2e2f1c886e754847df0ed3600372dbb378cc6d5))
+
+
+### Bug Fixes
+
+* address Copilot review — security, correctness and doc issues ([18875b6](https://github.com/oamrs/roam/commit/18875b6f411afcda4ab1f24f3a3694d4004fe273))
+* address PR review comments ([4e4e792](https://github.com/oamrs/roam/commit/4e4e792fc98df2d6bb21ef470936a342d872443c))
+
 ## [0.6.0](https://github.com/oamrs/roam/compare/oam-v0.5.0...oam-v0.6.0) (2026-04-19)
 
 
