@@ -1,8 +1,8 @@
 //! Agent memory provider hook — OSS trait contract.
 //!
 //! Defines the abstract interface for persistent session memory.  The `roam-public`
-//! crate ships only the trait and a no-op implementation; durable storage backed
-//! by Dolt branches lives in the enterprise backend.
+//! crate ships only the trait and a no-op implementation; durable storage lives
+//! in the enterprise backend.
 
 use async_trait::async_trait;
 
@@ -31,7 +31,7 @@ pub struct MemoryEntry {
 #[async_trait]
 pub trait AgentMemoryProvider: Send + Sync {
     /// Called when a new agent session is first registered.  Implementations may
-    /// use this to allocate session-scoped resources (e.g. a Dolt branch).
+    /// use this to allocate session-scoped resources for the session.
     async fn on_session_registered(&self, session_id: &str);
 
     /// Record a tool call event for the given session.

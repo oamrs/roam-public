@@ -7,8 +7,8 @@
 //! higher-paying orgs get headroom that is denied on lower tiers.
 //!
 //! The OSS default ([`NoOpOrgRateLimitProvider`]) returns the same permissive
-//! budget for every org; enterprise deployments swap in a
-//! `DoltOrgRateLimitProvider` that reads configuration from the database.
+//! budget for every org; enterprise deployments swap in a database-backed
+//! provider that reads per-org configuration.
 
 use async_trait::async_trait;
 
@@ -51,7 +51,7 @@ impl Default for OrgRateLimit {
 ///
 /// # Tiering
 ///
-/// Enterprise implementations back this with a `org_rate_limit_configs` table
+/// Enterprise implementations back this with a persistent configuration store
 /// so operators can adjust quotas per org without redeploying.  The OSS runtime
 /// uses [`NoOpOrgRateLimitProvider`], which always returns a permissive limit.
 #[async_trait]

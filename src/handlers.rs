@@ -34,7 +34,7 @@ impl EventHandler for AuditLogHandler {
 // ── AuditExporter ─────────────────────────────────────────────────────────────
 
 /// Hook for shipping audit records to external systems (SIEM, cloud logging,
-/// committed Dolt audit tables, etc.).
+/// centralised audit stores, etc.).
 ///
 /// The local [`AuditLogHandler`] writes to `stderr` — suitable for OSS
 /// single-node deployments.  Enterprise implementations implement this trait

@@ -3,8 +3,8 @@
 //! Defines the abstract interface for pausing high-risk agent actions and
 //! requesting human approval before execution commits.  The OSS default
 //! ([`NoOpApprovalGate`]) always approves; enterprise implementations wire up
-//! a persistent queue (e.g. Dolt-backed approval table, Slack notification,
-//! or a webhook) and block until a reviewer responds.
+//! a persistent queue (e.g. a database-backed approval table, a webhook,
+//! or a notification channel) and block until a reviewer responds.
 
 use async_trait::async_trait;
 

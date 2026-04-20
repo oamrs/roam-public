@@ -82,7 +82,7 @@ pub struct AccessPolicy {
 /// Asynchronous source of access policies.
 ///
 /// The library crate defines this trait; concrete implementations live in the
-/// service layer (e.g. `DoltPolicyProvider` backed by a MariaDB/Dolt table).
+/// enterprise service layer.
 #[async_trait]
 pub trait AccessPolicyProvider: Send + Sync {
     /// Return all policies that apply to `roles` within `org_id`.
@@ -120,7 +120,7 @@ pub enum EnforcementOutcome {
 
 /// Hook point for data-access enforcement implementations.
 ///
-/// The concrete `AccessEnforcer` (SQL rewriting with RLS/CLS) lives in the
+/// The concrete enforcer (SQL rewriting with RLS/CLS) lives in the
 /// enterprise service layer and is **not** part of the open-source `oam` crate.
 /// OSS consumers may implement this trait for custom enforcement logic.
 #[async_trait]

@@ -8,7 +8,7 @@
 //!
 //! The OSS default ([`NoOpSessionPolicy`]) returns an unbounded retention config
 //! and performs no cleanup.  Enterprise deployments replace it with a
-//! `DoltSessionRetentionPolicy` backed by a `session_retention_policies` table.
+//! database-backed implementation.
 
 use async_trait::async_trait;
 

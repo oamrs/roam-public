@@ -10,8 +10,7 @@
 //! while paying customers unlock `CODE_FIRST` and `HYBRID`.
 //!
 //! The OSS default ([`NoOpSchemaModePolicy`]) permits every mode for every org.
-//! Enterprise deployments replace it with a `DoltSchemaModePolicy` backed by a
-//! `schema_mode_policies` table.
+//! Enterprise deployments replace it with a database-backed implementation.
 
 use async_trait::async_trait;
 
