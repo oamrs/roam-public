@@ -1,3 +1,4 @@
+use crate::control_plane::{PlanDefinition, StepDefinition, WorkflowOrchestrator};
 use crate::executor::{
     ExecuteQueryRequest, GetSchemaRequest as ExecGetSchemaRequest,
     GetTableRequest as ExecGetTableRequest, QueryRuntimeAugmentor, QueryServiceImpl, QueryStatus,
@@ -20,6 +21,15 @@ use tonic::{transport::Server, Request, Response, Status};
 use oam_proto::v1::agent::{
     agent_service_server::{AgentService as ProtoAgentService, AgentServiceServer},
     ConnectRequest, ConnectResponse, Event, EventStreamRequest,
+};
+use oam_proto::v1::control::{
+    control_plane_service_server::{
+        ControlPlaneService as ProtoControlPlaneService, ControlPlaneServiceServer,
+    },
+    CancelPlanRequest, CancelPlanResponse, ExecuteStepRequest, ExecuteStepResponse,
+    GetPlanStatusRequest, GetPlanStatusResponse, LlmContextUpdate as ProtoLlmContextUpdate,
+    PlanEvent, SchemaTableDelta as ProtoSchemaTableDelta, StepStatusRecord,
+    StreamPlanEventsRequest, SubmitPlanRequest, SubmitPlanResponse,
 };
 use oam_proto::v1::query::{
     query_service_server::{QueryService as ProtoQueryService, QueryServiceServer},
@@ -99,6 +109,7 @@ pub struct GrpcExecutor {
     sessions: Arc<SessionRegistry>,
     runtime_augmentor: Option<Arc<dyn QueryRuntimeAugmentor>>,
     access_enforcer: Option<Arc<dyn crate::access_policy::DataAccessEnforcer>>,
+    workflow_orchestrator: Option<Arc<dyn WorkflowOrchestrator>>,
 }
 
 /// Basic implementation of AgentService for registration and event streaming
@@ -257,6 +268,7 @@ impl GrpcExecutor {
             sessions: Arc::new(SessionRegistry::default()),
             runtime_augmentor: None,
             access_enforcer: None,
+            workflow_orchestrator: None,
         })
     }
 
@@ -270,6 +282,11 @@ impl GrpcExecutor {
         enforcer: Arc<dyn crate::access_policy::DataAccessEnforcer>,
     ) -> Self {
         self.access_enforcer = Some(enforcer);
+        self
+    }
+
+    pub fn with_workflow_orchestrator(mut self, orch: Arc<dyn WorkflowOrchestrator>) -> Self {
+        self.workflow_orchestrator = Some(orch);
         self
     }
 
@@ -299,13 +316,21 @@ impl GrpcExecutor {
 
         let agent_svc = GrpcAgentServiceImpl::new(self.sessions.clone());
 
+        let maybe_cp_svc = self.workflow_orchestrator.map(|orch| {
+            ControlPlaneServiceServer::new(GrpcControlPlaneServiceImpl { orchestrator: orch })
+        });
+
         let handle = tokio::spawn(async move {
-            let _ = Server::builder()
+            let builder = Server::builder()
                 .add_service(QueryServiceServer::new(query_svc))
                 .add_service(SchemaServiceServer::new(schema_svc))
-                .add_service(AgentServiceServer::new(agent_svc))
-                .serve(addr_parsed)
-                .await;
+                .add_service(AgentServiceServer::new(agent_svc));
+
+            if let Some(cp_svc) = maybe_cp_svc {
+                let _ = builder.add_service(cp_svc).serve(addr_parsed).await;
+            } else {
+                let _ = builder.serve(addr_parsed).await;
+            }
         });
 
         Ok(handle)
@@ -508,4 +533,218 @@ impl ProtoSchemaService for GrpcSchemaServiceImpl {
     // Add RegisterSchema RPC here when CODE_FIRST mode support is needed.
     // Validate agent SchemaMode == CODE_FIRST or HYBRID before accepting registration;
     // DATA_FIRST agents must receive PermissionDenied.
+}
+
+// ── ControlPlane gRPC service ─────────────────────────────────────────────────
+
+struct GrpcControlPlaneServiceImpl {
+    orchestrator: Arc<dyn WorkflowOrchestrator>,
+}
+
+/// Streaming response type for `stream_plan_events`.
+pub struct PlanEventStream {
+    inner: ReceiverStream<Result<PlanEvent, Status>>,
+    subscriber_id: Option<usize>,
+}
+
+impl Stream for PlanEventStream {
+    type Item = Result<PlanEvent, Status>;
+
+    fn poll_next(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
+        Pin::new(&mut self.inner).poll_next(cx)
+    }
+}
+
+impl Drop for PlanEventStream {
+    fn drop(&mut self) {
+        if let Some(subscriber_id) = self.subscriber_id.take() {
+            let _ = get_event_bus().unregister_subscriber(subscriber_id);
+        }
+    }
+}
+
+/// Map proto `PlanStepDef` intent string to internal `ToolIntent`.
+fn parse_proto_intent(s: &str) -> crate::policy_engine::ToolIntent {
+    use crate::policy_engine::ToolIntent;
+    match s.trim().to_ascii_lowercase().as_str() {
+        "write_insert" | "writeinsert" | "insert" => ToolIntent::WriteInsert,
+        "write_update" | "writeupdate" | "update" => ToolIntent::WriteUpdate,
+        "write_delete" | "writedelete" | "delete" => ToolIntent::WriteDelete,
+        "admin" => ToolIntent::Admin,
+        _ => ToolIntent::ReadSelect,
+    }
+}
+
+/// Map a domain [`crate::control_plane::StepResult`] to its proto [`StepStatusRecord`].
+fn step_result_to_proto(r: &crate::control_plane::StepResult) -> StepStatusRecord {
+    StepStatusRecord {
+        step_id: r.step_id.clone(),
+        name: r.step_id.clone(), // fallback until StepResult carries a display name
+        status: r.status.as_str().to_string(),
+        row_count: r.row_count,
+        result_json: r.output_json.clone(),
+        schema_delta_json: r.schema_delta_json.clone(),
+        executed_at: r.executed_at.clone(),
+    }
+}
+
+/// Map a domain [`crate::control_plane::LlmContextUpdate`] to its proto counterpart.
+fn llm_context_update_to_proto(u: crate::control_plane::LlmContextUpdate) -> ProtoLlmContextUpdate {
+    ProtoLlmContextUpdate {
+        plan_id: u.plan_id,
+        step_id: u.step_id,
+        tool_output_json: u.tool_output_json,
+        schema_additions: u
+            .schema_additions
+            .into_iter()
+            .map(|d| ProtoSchemaTableDelta {
+                table_name: d.table_name,
+                operation: format!("{:?}", d.operation).to_uppercase(),
+                table_def_json: d.table_def_json,
+            })
+            .collect(),
+        augmentation_hints: u.augmentation_hints,
+    }
+}
+
+#[tonic::async_trait]
+impl ProtoControlPlaneService for GrpcControlPlaneServiceImpl {
+    // ── SubmitPlan ────────────────────────────────────────────────────────────
+    async fn submit_plan(
+        &self,
+        request: Request<SubmitPlanRequest>,
+    ) -> Result<Response<SubmitPlanResponse>, Status> {
+        let req = request.into_inner();
+        let session_id = req.session_id.clone();
+        let def = PlanDefinition {
+            name: req.name,
+            description: req.description,
+            steps: req
+                .steps
+                .into_iter()
+                .map(|s| StepDefinition {
+                    id: s.id,
+                    name: s.name,
+                    tool_name: s.tool_name,
+                    tool_intent: parse_proto_intent(&s.intent),
+                    query_template: s.query_template,
+                    depends_on: s.depends_on,
+                    schema_table_hints: s.schema_table_hints,
+                })
+                .collect(),
+        };
+        match self.orchestrator.create_plan(&session_id, def).await {
+            Ok(record) => Ok(Response::new(SubmitPlanResponse {
+                success: true,
+                plan_id: record.plan_id,
+                error_message: String::new(),
+            })),
+            Err(e) => Ok(Response::new(SubmitPlanResponse {
+                success: false,
+                plan_id: String::new(),
+                error_message: e,
+            })),
+        }
+    }
+
+    // ── GetPlanStatus ─────────────────────────────────────────────────────────
+    async fn get_plan_status(
+        &self,
+        request: Request<GetPlanStatusRequest>,
+    ) -> Result<Response<GetPlanStatusResponse>, Status> {
+        let plan_id = request.into_inner().plan_id;
+        match self.orchestrator.get_plan(&plan_id).await {
+            Ok(Some(record)) => {
+                let steps = record.steps.iter().map(step_result_to_proto).collect();
+                Ok(Response::new(GetPlanStatusResponse {
+                    plan_id: record.plan_id,
+                    status: record.status.as_str().to_string(),
+                    steps,
+                    error_message: String::new(),
+                }))
+            }
+            Ok(None) => Err(Status::not_found(format!("plan '{}' not found", plan_id))),
+            Err(e) => Err(Status::internal(e)),
+        }
+    }
+
+    // ── ExecuteStep ───────────────────────────────────────────────────────────
+    async fn execute_step(
+        &self,
+        request: Request<ExecuteStepRequest>,
+    ) -> Result<Response<ExecuteStepResponse>, Status> {
+        let mut ctx = QueryRuntimeContext::from_metadata(request.metadata());
+        let req = request.into_inner();
+        ctx.plan_id = Some(req.plan_id.clone());
+
+        match self
+            .orchestrator
+            .execute_step(&req.plan_id, &req.step_id, &ctx)
+            .await
+        {
+            Ok((step_result, ctx_update)) => Ok(Response::new(ExecuteStepResponse {
+                success: true,
+                step_result: Some(step_result_to_proto(&step_result)),
+                llm_context_update: Some(llm_context_update_to_proto(ctx_update)),
+                error_message: String::new(),
+            })),
+            Err(e) => Ok(Response::new(ExecuteStepResponse {
+                success: false,
+                step_result: None,
+                llm_context_update: None,
+                error_message: e,
+            })),
+        }
+    }
+
+    // ── CancelPlan ────────────────────────────────────────────────────────────
+    async fn cancel_plan(
+        &self,
+        request: Request<CancelPlanRequest>,
+    ) -> Result<Response<CancelPlanResponse>, Status> {
+        let plan_id = request.into_inner().plan_id;
+        match self.orchestrator.cancel_plan(&plan_id).await {
+            Ok(()) => Ok(Response::new(CancelPlanResponse {
+                success: true,
+                error_message: String::new(),
+            })),
+            Err(e) => Ok(Response::new(CancelPlanResponse {
+                success: false,
+                error_message: e,
+            })),
+        }
+    }
+
+    // ── StreamPlanEvents ──────────────────────────────────────────────────────
+    type StreamPlanEventsStream = PlanEventStream;
+
+    async fn stream_plan_events(
+        &self,
+        request: Request<StreamPlanEventsRequest>,
+    ) -> Result<Response<Self::StreamPlanEventsStream>, Status> {
+        let requested_plan_id = request.into_inner().plan_id;
+        let (tx, rx) = tokio::sync::mpsc::channel(32);
+        let subscriber_id = get_event_bus()
+            .register_subscriber(Box::new(move |event: &DomainEvent| {
+                let metadata = event.metadata();
+                if metadata.get("plan_id").map(String::as_str) != Some(requested_plan_id.as_str()) {
+                    return;
+                }
+                let event_type = event.event_type().to_string();
+                let payload_json = serde_json::to_string(event).unwrap_or_default();
+                let timestamp = Utc::now().to_rfc3339();
+                let _ = tx.try_send(Ok(PlanEvent {
+                    plan_id: requested_plan_id.clone(),
+                    event_type,
+                    payload_json,
+                    timestamp,
+                }));
+            }))
+            .map_err(Status::internal)?;
+
+        Ok(Response::new(PlanEventStream {
+            inner: ReceiverStream::new(rx),
+            subscriber_id: Some(subscriber_id),
+        }))
+    }
 }

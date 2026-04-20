@@ -139,6 +139,45 @@ pub enum Event {
         #[serde(default, skip_serializing_if = "HashMap::is_empty")]
         context: HashMap<String, String>,
     },
+    // ── Control plane events ─────────────────────────────────────────────────
+    /// Emitted when a new multi-step plan is created for a session.
+    #[serde(rename = "PlanCreated")]
+    PlanCreated {
+        plan_id: String,
+        session_id: String,
+        step_count: usize,
+        timestamp: String,
+    },
+    /// Emitted when a single step within a plan finishes execution (or fails).
+    #[serde(rename = "PlanStepExecuted")]
+    PlanStepExecuted {
+        plan_id: String,
+        step_id: String,
+        step_index: usize,
+        /// "completed" | "failed"
+        status: String,
+        row_count: i64,
+        duration_ms: f64,
+        timestamp: String,
+    },
+    /// Emitted when all steps in a plan have reached `Completed`.
+    #[serde(rename = "PlanCompleted")]
+    PlanCompleted {
+        plan_id: String,
+        session_id: String,
+        total_steps: usize,
+        duration_ms: f64,
+        timestamp: String,
+    },
+    /// Emitted when a plan is cancelled or a step fails and halts the plan.
+    #[serde(rename = "PlanFailed")]
+    PlanFailed {
+        plan_id: String,
+        session_id: String,
+        failed_step_id: String,
+        reason: String,
+        timestamp: String,
+    },
 }
 
 impl Event {
@@ -353,6 +392,10 @@ impl Event {
             Event::RowsFiltered { .. } => "RowsFiltered",
             Event::ColumnsRedacted { .. } => "ColumnsRedacted",
             Event::AccessDenied { .. } => "AccessDenied",
+            Event::PlanCreated { .. } => "PlanCreated",
+            Event::PlanStepExecuted { .. } => "PlanStepExecuted",
+            Event::PlanCompleted { .. } => "PlanCompleted",
+            Event::PlanFailed { .. } => "PlanFailed",
         }
     }
 
@@ -541,9 +584,121 @@ impl Event {
                 map.insert("timestamp".to_string(), timestamp.clone());
                 Self::insert_context_metadata(&mut map, context);
             }
+            Event::PlanCreated {
+                plan_id,
+                session_id,
+                step_count,
+                timestamp,
+            } => {
+                map.insert("plan_id".to_string(), plan_id.clone());
+                map.insert("session_id".to_string(), session_id.clone());
+                map.insert("step_count".to_string(), step_count.to_string());
+                map.insert("timestamp".to_string(), timestamp.clone());
+            }
+            Event::PlanStepExecuted {
+                plan_id,
+                step_id,
+                step_index,
+                status,
+                row_count,
+                duration_ms,
+                timestamp,
+            } => {
+                map.insert("plan_id".to_string(), plan_id.clone());
+                map.insert("step_id".to_string(), step_id.clone());
+                map.insert("step_index".to_string(), step_index.to_string());
+                map.insert("status".to_string(), status.clone());
+                map.insert("row_count".to_string(), row_count.to_string());
+                map.insert("duration_ms".to_string(), duration_ms.to_string());
+                map.insert("timestamp".to_string(), timestamp.clone());
+            }
+            Event::PlanCompleted {
+                plan_id,
+                session_id,
+                total_steps,
+                duration_ms,
+                timestamp,
+            } => {
+                map.insert("plan_id".to_string(), plan_id.clone());
+                map.insert("session_id".to_string(), session_id.clone());
+                map.insert("total_steps".to_string(), total_steps.to_string());
+                map.insert("duration_ms".to_string(), duration_ms.to_string());
+                map.insert("timestamp".to_string(), timestamp.clone());
+            }
+            Event::PlanFailed {
+                plan_id,
+                session_id,
+                failed_step_id,
+                reason,
+                timestamp,
+            } => {
+                map.insert("plan_id".to_string(), plan_id.clone());
+                map.insert("session_id".to_string(), session_id.clone());
+                map.insert("failed_step_id".to_string(), failed_step_id.clone());
+                map.insert("reason".to_string(), reason.clone());
+                map.insert("timestamp".to_string(), timestamp.clone());
+            }
         }
 
         map
+    }
+
+    pub fn plan_created(plan_id: String, session_id: String, step_count: usize) -> Self {
+        Event::PlanCreated {
+            plan_id,
+            session_id,
+            step_count,
+            timestamp: chrono::Utc::now().to_rfc3339(),
+        }
+    }
+
+    pub fn plan_step_executed(
+        plan_id: String,
+        step_id: String,
+        step_index: usize,
+        status: String,
+        row_count: i64,
+        duration_ms: f64,
+    ) -> Self {
+        Event::PlanStepExecuted {
+            plan_id,
+            step_id,
+            step_index,
+            status,
+            row_count,
+            duration_ms,
+            timestamp: chrono::Utc::now().to_rfc3339(),
+        }
+    }
+
+    pub fn plan_completed(
+        plan_id: String,
+        session_id: String,
+        total_steps: usize,
+        duration_ms: f64,
+    ) -> Self {
+        Event::PlanCompleted {
+            plan_id,
+            session_id,
+            total_steps,
+            duration_ms,
+            timestamp: chrono::Utc::now().to_rfc3339(),
+        }
+    }
+
+    pub fn plan_failed(
+        plan_id: String,
+        session_id: String,
+        failed_step_id: String,
+        reason: String,
+    ) -> Self {
+        Event::PlanFailed {
+            plan_id,
+            session_id,
+            failed_step_id,
+            reason,
+            timestamp: chrono::Utc::now().to_rfc3339(),
+        }
     }
 }
 

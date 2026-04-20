@@ -1,5 +1,6 @@
 pub mod access_policy;
 pub mod approval;
+pub mod control_plane;
 pub mod execution_engine;
 pub mod executor;
 pub mod ffi;
@@ -24,13 +25,19 @@ pub use access_policy::{
     RowPolicy,
 };
 pub use approval::{ApprovalDecision, ApprovalGate, NoOpApprovalGate, PendingAction};
+pub use control_plane::{
+    DeltaOperation, LlmContextUpdate, NoOpWorkflowOrchestrator, PlanDefinition, PlanRecord,
+    PlanStatus, SchemaTableDelta, StepDefinition, StepResult, StepStatus, WorkflowOrchestrator,
+};
 pub use execution_engine::{
     CancellationToken, ConnectionPool, ExecutionEngine, ExecutionMetrics, PoolStats, QueryPriority,
     QueryRequest, QueryResult, ResultStatus,
 };
 pub use executor::{
-    MirrorProvider, QueryRuntimeAugmentation, QueryRuntimeAugmentor, QueryService,
-    QueryServiceImpl, QueryStatus, SchemaService, SchemaServiceImpl, SqliteMirrorProvider,
+    ExecuteQueryRequest, ExecuteQueryResponse, GetSchemaRequest, GetSchemaResponse,
+    GetTableRequest, GetTableResponse, MirrorProvider, QueryParameter, QueryRuntimeAugmentation,
+    QueryRuntimeAugmentor, QueryService, QueryServiceImpl, QueryStatus, SchemaService,
+    SchemaServiceImpl, SqliteMirrorProvider, ValidateQueryRequest, ValidationResponse,
 };
 pub use grpc_executor::GrpcExecutor;
 pub use handlers::{

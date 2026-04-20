@@ -15,6 +15,8 @@ const RUNTIME_AUGMENTATION_ID_HEADER: &str = "x-roam-runtime-augmentation-id";
 const RUNTIME_AUGMENTATION_KEY_HEADER: &str = "x-roam-runtime-augmentation-key";
 const DOMAIN_TAGS_HEADER: &str = "x-roam-domain-tags";
 const TABLE_NAMES_HEADER: &str = "x-roam-table-names";
+const PLAN_ID_HEADER: &str = "x-roam-plan-id";
+const STEP_INDEX_HEADER: &str = "x-roam-step-index";
 
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct QueryRuntimeContext {
@@ -31,6 +33,10 @@ pub struct QueryRuntimeContext {
     pub runtime_augmentation_key: Option<String>,
     pub domain_tags: Vec<String>,
     pub table_names: Vec<String>,
+    /// Identifies the multi-step plan this query belongs to, if any.
+    pub plan_id: Option<String>,
+    /// Zero-based index of the step within the plan.
+    pub step_index: Option<u32>,
 }
 
 impl QueryRuntimeContext {
@@ -50,6 +56,9 @@ impl QueryRuntimeContext {
             runtime_augmentation_key: get_ascii_metadata(metadata, RUNTIME_AUGMENTATION_KEY_HEADER),
             domain_tags: get_csv_metadata(metadata, DOMAIN_TAGS_HEADER),
             table_names: get_csv_metadata(metadata, TABLE_NAMES_HEADER),
+            plan_id: get_ascii_metadata(metadata, PLAN_ID_HEADER),
+            step_index: get_ascii_metadata(metadata, STEP_INDEX_HEADER)
+                .and_then(|v| v.trim().parse::<u32>().ok()),
         }
     }
 
@@ -67,6 +76,8 @@ impl QueryRuntimeContext {
             || self.runtime_augmentation_key.is_some()
             || !self.domain_tags.is_empty()
             || !self.table_names.is_empty()
+            || self.plan_id.is_some()
+            || self.step_index.is_some()
     }
 
     pub fn policy_context(&self) -> Option<PolicyContext> {
@@ -131,6 +142,10 @@ impl QueryRuntimeContext {
         }
         if !self.table_names.is_empty() {
             metadata.insert("table_names".to_string(), self.table_names.join(","));
+        }
+        insert_optional(&mut metadata, "plan_id", self.plan_id.as_ref());
+        if let Some(idx) = self.step_index {
+            metadata.insert("step_index".to_string(), idx.to_string());
         }
 
         metadata
