@@ -144,10 +144,53 @@ impl PolicyContext {
 
 pub struct PolicyEngine;
 
+// ── PolicyPlugin ──────────────────────────────────────────────────────────────
+
+/// Hook for semantic / contextual policy analysis beyond keyword blocking.
+///
+/// The base [`PolicyEngine`] performs structural keyword-based P2SQL defence
+/// (OSS).  Enterprise implementations supply one or more `PolicyPlugin`s that
+/// can inspect the normalised query, the tool contract, and any user-supplied
+/// context to return a richer decision — for example embedding-based intent
+/// classifiers or model-assisted anomaly detection.
+///
+/// A plugin returns `None` to abstain (defer to the next plugin or the base
+/// engine result), or `Some(PolicyDecision)` to short-circuit evaluation.
+/// The first `Some` result with `allowed == false` wins (fail-secure); the
+/// first `Some` result with `allowed == true` allows the query only if the
+/// base engine also allows it.
+pub trait PolicyPlugin: Send + Sync {
+    /// Analyse the query and optionally override the base policy decision.
+    fn analyze(&self, query: &str, context: &PolicyContext) -> Option<PolicyDecision>;
+}
+
 impl PolicyEngine {
     pub fn evaluate(query: &str, intent: ToolIntent) -> PolicyDecision {
         let context = PolicyContext::for_intent(intent);
         Self::evaluate_with_context(query, &context)
+    }
+
+    /// Evaluate with the base keyword engine **and** run a chain of enterprise
+    /// [`PolicyPlugin`]s afterwards.  The first plugin that returns a denying
+    /// decision short-circuits the chain (fail-secure).  Plugins that return
+    /// `None` abstain; the base engine result stands.
+    pub fn evaluate_with_plugins(
+        query: &str,
+        context: &PolicyContext,
+        plugins: &[&dyn PolicyPlugin],
+    ) -> PolicyDecision {
+        let base = Self::evaluate_with_context(query, context);
+        if !base.allowed {
+            return base;
+        }
+        for plugin in plugins {
+            if let Some(decision) = plugin.analyze(query, context) {
+                if !decision.allowed {
+                    return decision;
+                }
+            }
+        }
+        base
     }
 
     pub fn evaluate_with_context(query: &str, context: &PolicyContext) -> PolicyDecision {
