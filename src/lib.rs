@@ -12,7 +12,10 @@ pub mod mapper;
 pub mod memory;
 pub mod mirror;
 pub mod policy_engine;
+pub mod quota;
 pub mod runtime_context;
+pub mod schema_mode_policy;
+pub mod session_policy;
 pub mod tcp;
 
 // Re-export commonly used types
@@ -53,7 +56,10 @@ pub use policy_engine::{
     AuthorizationContext, AuthorizedSubqueryShape, PolicyContext, PolicyDecision, PolicyEngine,
     PolicyPlugin, SubqueryPolicy, ToolContract, ToolIntent,
 };
+pub use quota::{NoOpOrgRateLimitProvider, OrgRateLimit, OrgRateLimitProvider};
 pub use runtime_context::QueryRuntimeContext;
+pub use schema_mode_policy::{NoOpSchemaModePolicy, SchemaModePolicy, SchemaModePolicyDecision};
+pub use session_policy::{AgentSessionPolicy, NoOpSessionPolicy, SessionRetentionConfig};
 pub use tcp::{
     ApiKeyAuth, AuthProvider, AuthenticatedClient, JsonRpcClient, JsonRpcServer,
     JsonRpcServerConfig, RateLimitConfig, RateLimiter, RateLimiterStats, TokenAuth,
