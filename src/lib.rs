@@ -14,7 +14,8 @@ pub mod tcp;
 
 // Re-export commonly used types
 pub use access_policy::{
-    AccessEnforcer, AccessPolicy, AccessPolicyProvider, ColumnPolicy, EnforcementOutcome, RowPolicy,
+    AccessPolicy, AccessPolicyProvider, ColumnPolicy, DataAccessEnforcer, EnforcementOutcome,
+    RowPolicy,
 };
 pub use execution_engine::{
     CancellationToken, ConnectionPool, ExecutionEngine, ExecutionMetrics, PoolStats, QueryPriority,

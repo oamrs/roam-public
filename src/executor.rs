@@ -1,4 +1,4 @@
-use crate::access_policy::{AccessEnforcer, EnforcementOutcome};
+use crate::access_policy::{DataAccessEnforcer, EnforcementOutcome};
 use crate::mirror::SchemaModel;
 use crate::policy_engine::{PolicyContext, PolicyEngine, ToolIntent};
 use crate::runtime_context::QueryRuntimeContext;
@@ -259,7 +259,7 @@ impl SchemaService for SchemaServiceImpl {
 pub struct QueryServiceImpl {
     db_path: Option<String>,
     runtime_augmentor: Option<Arc<dyn QueryRuntimeAugmentor>>,
-    access_enforcer: Option<Arc<AccessEnforcer>>,
+    access_enforcer: Option<Arc<dyn DataAccessEnforcer>>,
 }
 
 impl QueryServiceImpl {
@@ -280,7 +280,7 @@ impl QueryServiceImpl {
         self.runtime_augmentor = Some(augmentor);
     }
 
-    pub fn set_access_enforcer(&mut self, enforcer: Arc<AccessEnforcer>) {
+    pub fn set_access_enforcer(&mut self, enforcer: Arc<dyn DataAccessEnforcer>) {
         self.access_enforcer = Some(enforcer);
     }
 
@@ -868,7 +868,7 @@ impl QueryServiceImpl {
     }
 
     async fn run_enforcement(
-        enforcer: &AccessEnforcer,
+        enforcer: &Arc<dyn DataAccessEnforcer>,
         request: &ExecuteQueryRequest,
         db_path: &str,
         rtx: &QueryRuntimeContext,
@@ -980,7 +980,7 @@ async fn execute_query_on_database_async(
     }
 }
 
-pub(crate) fn find_top_level_keyword_position(query: &str, keyword: &str) -> Option<usize> {
+pub fn find_top_level_keyword_position(query: &str, keyword: &str) -> Option<usize> {
     let chars: Vec<(usize, char)> = query.char_indices().collect();
     let mut index = 0;
     let mut depth = 0usize;

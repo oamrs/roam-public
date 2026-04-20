@@ -98,7 +98,7 @@ pub struct GrpcExecutor {
     schema_service: Arc<Mutex<SchemaServiceImpl>>,
     sessions: Arc<SessionRegistry>,
     runtime_augmentor: Option<Arc<dyn QueryRuntimeAugmentor>>,
-    access_enforcer: Option<Arc<crate::access_policy::AccessEnforcer>>,
+    access_enforcer: Option<Arc<dyn crate::access_policy::DataAccessEnforcer>>,
 }
 
 /// Basic implementation of AgentService for registration and event streaming
@@ -267,7 +267,7 @@ impl GrpcExecutor {
 
     pub fn with_access_enforcer(
         mut self,
-        enforcer: Arc<crate::access_policy::AccessEnforcer>,
+        enforcer: Arc<dyn crate::access_policy::DataAccessEnforcer>,
     ) -> Self {
         self.access_enforcer = Some(enforcer);
         self
