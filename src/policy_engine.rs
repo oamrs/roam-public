@@ -156,9 +156,10 @@ pub struct PolicyEngine;
 ///
 /// A plugin returns `None` to abstain (defer to the next plugin or the base
 /// engine result), or `Some(PolicyDecision)` to short-circuit evaluation.
-/// The first `Some` result with `allowed == false` wins (fail-secure); the
-/// first `Some` result with `allowed == true` allows the query only if the
-/// base engine also allows it.
+/// **Plugins are deny-only**: the first `Some` result with `allowed == false`
+/// wins (fail-secure) and stops the chain.  A plugin returning
+/// `Some(PolicyDecision { allowed: true, .. })` is treated as an abstention;
+/// only the base engine can approve a query.
 pub trait PolicyPlugin: Send + Sync {
     /// Analyse the query and optionally override the base policy decision.
     fn analyze(&self, query: &str, context: &PolicyContext) -> Option<PolicyDecision>;
@@ -171,9 +172,10 @@ impl PolicyEngine {
     }
 
     /// Evaluate with the base keyword engine **and** run a chain of enterprise
-    /// [`PolicyPlugin`]s afterwards.  The first plugin that returns a denying
-    /// decision short-circuits the chain (fail-secure).  Plugins that return
-    /// `None` abstain; the base engine result stands.
+    /// [`PolicyPlugin`]s afterwards.  Plugins are **deny-only**: the first
+    /// plugin that returns a denying decision short-circuits the chain
+    /// (fail-secure).  Plugins that return `None` or an allowing decision
+    /// abstain; only the base engine can permit a query.
     pub fn evaluate_with_plugins(
         query: &str,
         context: &PolicyContext,

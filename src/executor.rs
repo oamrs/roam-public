@@ -885,6 +885,7 @@ impl QueryServiceImpl {
             EnforcementOutcome::Rewrite {
                 sql,
                 ref redacted_columns,
+                rls_applied,
             } => {
                 let table =
                     crate::access_policy::extract_query_table(&request.query).unwrap_or_default();
@@ -902,7 +903,7 @@ impl QueryServiceImpl {
                     let _ = get_event_bus().dispatch_generic(&ev);
                 }
 
-                if sql.contains("_roam_rls") {
+                if rls_applied {
                     let ev =
                         Event::rows_filtered(request.db_identifier.clone(), table, user_id, ctx);
                     let _ = get_event_bus().dispatch_generic(&ev);

@@ -111,6 +111,10 @@ pub enum EnforcementOutcome {
         sql: String,
         /// Names of columns that were removed from a `SELECT *` expansion (CLS).
         redacted_columns: Vec<String>,
+        /// `true` when row-level predicates were applied (the query was wrapped
+        /// in a derived-table subquery).  Use this flag instead of inspecting
+        /// SQL text to trigger a `RowsFiltered` event.
+        rls_applied: bool,
     },
     /// The query must be blocked entirely.
     Deny { reason: String },
