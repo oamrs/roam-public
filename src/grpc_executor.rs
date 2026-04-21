@@ -103,6 +103,16 @@ pub fn table_to_table_def(table: &crate::mirror::Table) -> TableDef {
     }
 }
 
+/// Hook for scanning incoming agent inputs for prompt-injection or policy
+/// violations before the query is forwarded to the backing database.
+///
+/// Register with [`GrpcExecutor::with_input_scanner`].  On a positive match,
+/// return `Err(reason)` to reject the request (or emit an event and return
+/// `Ok(())` to observe-only).
+pub trait InputScannerHook: Send + Sync {
+    fn scan(&self, input: &str, context: &QueryRuntimeContext) -> Result<(), String>;
+}
+
 pub struct GrpcExecutor {
     query_service: Arc<Mutex<QueryServiceImpl>>,
     schema_service: Arc<Mutex<SchemaServiceImpl>>,
@@ -110,6 +120,7 @@ pub struct GrpcExecutor {
     runtime_augmentor: Option<Arc<dyn QueryRuntimeAugmentor>>,
     access_enforcer: Option<Arc<dyn crate::access_policy::DataAccessEnforcer>>,
     workflow_orchestrator: Option<Arc<dyn WorkflowOrchestrator>>,
+    input_scanner: Option<Arc<dyn InputScannerHook>>,
 }
 
 /// Basic implementation of AgentService for registration and event streaming
@@ -269,6 +280,7 @@ impl GrpcExecutor {
             runtime_augmentor: None,
             access_enforcer: None,
             workflow_orchestrator: None,
+            input_scanner: None,
         })
     }
 
@@ -287,6 +299,11 @@ impl GrpcExecutor {
 
     pub fn with_workflow_orchestrator(mut self, orch: Arc<dyn WorkflowOrchestrator>) -> Self {
         self.workflow_orchestrator = Some(orch);
+        self
+    }
+
+    pub fn with_input_scanner(mut self, scanner: Arc<dyn InputScannerHook>) -> Self {
+        self.input_scanner = Some(scanner);
         self
     }
 
@@ -309,6 +326,7 @@ impl GrpcExecutor {
         let query_svc = GrpcQueryServiceImpl {
             inner: self.query_service.clone(),
             sessions: self.sessions.clone(),
+            input_scanner: self.input_scanner.clone(),
         };
         let schema_svc = GrpcSchemaServiceImpl {
             inner: self.schema_service.clone(),
@@ -340,6 +358,7 @@ impl GrpcExecutor {
 struct GrpcQueryServiceImpl {
     inner: Arc<Mutex<QueryServiceImpl>>,
     sessions: Arc<SessionRegistry>,
+    input_scanner: Option<Arc<dyn InputScannerHook>>,
 }
 
 impl GrpcQueryServiceImpl {
@@ -382,6 +401,13 @@ impl ProtoQueryService for GrpcQueryServiceImpl {
             limit: req.limit,
             timeout_seconds: req.timeout_seconds,
         };
+
+        // Run injection / policy scanner before acquiring the service lock.
+        if let Some(scanner) = &self.input_scanner {
+            if let Err(reason) = scanner.scan(&exec_req.query, &runtime_context) {
+                return Err(Status::invalid_argument(reason));
+            }
+        }
 
         let validate_req = ValidateQueryRequest {
             db_identifier: exec_req.db_identifier.clone(),

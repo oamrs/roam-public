@@ -1,7 +1,8 @@
+use async_trait::async_trait;
 use once_cell::sync::Lazy;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
-use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -21,6 +22,58 @@ pub struct RuntimeAugmentationAuditRecord {
     pub selection_reason: String,
     pub rendered_output: String,
     pub timestamp: String,
+}
+
+/// A tamper-evident envelope that wraps every dispatched [`Event`].
+///
+/// Each envelope carries a monotonically-incrementing `sequence` counter and a
+/// SHA-256 hash chain (`prev_hash` → `hash`) so that any gap or modification in
+/// an exported audit log is immediately detectable.  The hash covers the
+/// sequence number, previous hash, the JSON-serialised event body, and the
+/// `emitted_at` timestamp.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct AuditEventEnvelope {
+    /// Monotonically increasing counter; starts at 1 after process start.
+    pub sequence: u64,
+    /// Optional W3C trace-context trace ID for distributed correlation.
+    pub trace_id: Option<String>,
+    /// Optional W3C trace-context span ID.
+    pub span_id: Option<String>,
+    /// SHA-256 hex digest of the *previous* envelope (empty string for the first).
+    pub prev_hash: String,
+    /// SHA-256 hex digest of `"{sequence}|{prev_hash}|{event_json}|{emitted_at}"`.
+    pub hash: String,
+    /// The domain event payload.
+    pub event: Event,
+    /// RFC 3339 timestamp when the envelope was produced.
+    pub emitted_at: String,
+}
+
+impl AuditEventEnvelope {
+    fn compute_hash(sequence: u64, prev_hash: &str, event_json: &str, emitted_at: &str) -> String {
+        use sha2::{Digest, Sha256};
+        let mut hasher = Sha256::new();
+        hasher.update(sequence.to_string().as_bytes());
+        hasher.update(b"|");
+        hasher.update(prev_hash.as_bytes());
+        hasher.update(b"|");
+        hasher.update(event_json.as_bytes());
+        hasher.update(b"|");
+        hasher.update(emitted_at.as_bytes());
+        hex::encode(hasher.finalize())
+    }
+}
+
+/// Hook for shipping [`AuditEventEnvelope`]s to external systems: SIEM,
+/// cloud logging, AI-SPM tools, etc.
+///
+/// Register implementations with [`EventBus::register_audit_exporter`].
+/// Failures inside `export` **must not** propagate; implementations should
+/// log the failure and return.
+#[async_trait]
+pub trait AuditExporter: Send + Sync {
+    /// Called once per dispatched event with the fully-formed envelope.
+    async fn export(&self, envelope: AuditEventEnvelope);
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -177,6 +230,43 @@ pub enum Event {
         failed_step_id: String,
         reason: String,
         timestamp: String,
+    },
+    // ── AI-SPM / agent activity events ──────────────────────────────────────
+    /// Emitted for every inbound gRPC or REST tool call made by an LLM agent.
+    /// Captures the function name, serialised arguments, result summary, and
+    /// end-to-end latency — the canonical "LLM function call" audit record.
+    #[serde(rename = "LlmToolCallAuditRecorded")]
+    LlmToolCallAuditRecorded {
+        /// Logical tool/function name (e.g. `"execute_query"`, `"POST /api/plans"`).
+        tool_name: String,
+        /// JSON-serialised representation of the tool call arguments.
+        function_arguments: String,
+        /// Brief outcome string: `"success:N_rows"`, `"error:…"`, `"http:200"`, etc.
+        result_summary: String,
+        /// Wall-clock duration of the tool call in milliseconds.
+        duration_ms: i64,
+        timestamp: String,
+        #[serde(default, skip_serializing_if = "HashMap::is_empty")]
+        context: HashMap<String, String>,
+    },
+    /// Emitted when one or more prompt-injection patterns are detected in an
+    /// incoming agent request.  Severity indicates confidence; `action_taken`
+    /// reflects whether the request was observed-only or blocked.
+    #[serde(rename = "PromptInjectionSignalRaised")]
+    PromptInjectionSignalRaised {
+        /// First 500 characters of the input that triggered detection.
+        input_excerpt: String,
+        /// SHA-256 hex digest of the full input (for log correlation without storing PII).
+        input_hash: String,
+        /// Names of the patterns that matched.
+        matched_patterns: Vec<String>,
+        /// `"low"` | `"medium"` | `"high"`
+        severity: String,
+        /// `"observed"` | `"blocked"`
+        action_taken: String,
+        timestamp: String,
+        #[serde(default, skip_serializing_if = "HashMap::is_empty")]
+        context: HashMap<String, String>,
     },
 }
 
@@ -396,6 +486,8 @@ impl Event {
             Event::PlanStepExecuted { .. } => "PlanStepExecuted",
             Event::PlanCompleted { .. } => "PlanCompleted",
             Event::PlanFailed { .. } => "PlanFailed",
+            Event::LlmToolCallAuditRecorded { .. } => "LlmToolCallAuditRecorded",
+            Event::PromptInjectionSignalRaised { .. } => "PromptInjectionSignalRaised",
         }
     }
 
@@ -638,6 +730,38 @@ impl Event {
                 map.insert("reason".to_string(), reason.clone());
                 map.insert("timestamp".to_string(), timestamp.clone());
             }
+            Event::LlmToolCallAuditRecorded {
+                tool_name,
+                function_arguments,
+                result_summary,
+                duration_ms,
+                timestamp,
+                context,
+            } => {
+                map.insert("tool_name".to_string(), tool_name.clone());
+                map.insert("function_arguments".to_string(), function_arguments.clone());
+                map.insert("result_summary".to_string(), result_summary.clone());
+                map.insert("duration_ms".to_string(), duration_ms.to_string());
+                map.insert("timestamp".to_string(), timestamp.clone());
+                Self::insert_context_metadata(&mut map, context);
+            }
+            Event::PromptInjectionSignalRaised {
+                input_excerpt,
+                input_hash,
+                matched_patterns,
+                severity,
+                action_taken,
+                timestamp,
+                context,
+            } => {
+                map.insert("input_excerpt".to_string(), input_excerpt.clone());
+                map.insert("input_hash".to_string(), input_hash.clone());
+                map.insert("matched_patterns".to_string(), matched_patterns.join(","));
+                map.insert("severity".to_string(), severity.clone());
+                map.insert("action_taken".to_string(), action_taken.clone());
+                map.insert("timestamp".to_string(), timestamp.clone());
+                Self::insert_context_metadata(&mut map, context);
+            }
         }
 
         map
@@ -700,6 +824,42 @@ impl Event {
             timestamp: chrono::Utc::now().to_rfc3339(),
         }
     }
+
+    pub fn llm_tool_call_audit_recorded(
+        tool_name: String,
+        function_arguments: String,
+        result_summary: String,
+        duration_ms: i64,
+        context: HashMap<String, String>,
+    ) -> Self {
+        Event::LlmToolCallAuditRecorded {
+            tool_name,
+            function_arguments,
+            result_summary,
+            duration_ms,
+            timestamp: chrono::Utc::now().to_rfc3339(),
+            context,
+        }
+    }
+
+    pub fn prompt_injection_signal_raised(
+        input_excerpt: String,
+        input_hash: String,
+        matched_patterns: Vec<String>,
+        severity: String,
+        action_taken: String,
+        context: HashMap<String, String>,
+    ) -> Self {
+        Event::PromptInjectionSignalRaised {
+            input_excerpt,
+            input_hash,
+            matched_patterns,
+            severity,
+            action_taken,
+            timestamp: chrono::Utc::now().to_rfc3339(),
+            context,
+        }
+    }
 }
 
 type SubscriberFn = Box<dyn Fn(&Event) + Send + 'static>;
@@ -739,6 +899,12 @@ pub struct EventBus {
     type_subscribers: Mutex<TypeSubscriberMap>,
     next_subscriber_id: AtomicUsize,
     handler_chain: Mutex<Vec<Arc<dyn EventHandler>>>,
+    /// Monotonically-incrementing counter used to sequence audit envelopes.
+    sequence_counter: AtomicU64,
+    /// SHA-256 hex digest of the last emitted [`AuditEventEnvelope`] (empty for first).
+    last_hash: Mutex<String>,
+    /// Registered [`AuditExporter`]s fired asynchronously on every dispatched event.
+    audit_exporters: Mutex<Vec<Arc<dyn AuditExporter>>>,
 }
 
 impl Default for EventBus {
@@ -757,6 +923,9 @@ impl EventBus {
             type_subscribers: Mutex::new(HashMap::new()),
             next_subscriber_id: AtomicUsize::new(1),
             handler_chain: Mutex::new(Vec::new()),
+            sequence_counter: AtomicU64::new(0),
+            last_hash: Mutex::new(String::new()),
+            audit_exporters: Mutex::new(Vec::new()),
         }
     }
 
@@ -806,6 +975,46 @@ impl EventBus {
             .map_err(|e| format!("Failed to acquire lock: {}", e))?
             .push(event.clone());
 
+        // ── Build tamper-evident audit envelope ──────────────────────────
+        let sequence = self.sequence_counter.fetch_add(1, Ordering::SeqCst) + 1;
+        let emitted_at = chrono::Utc::now().to_rfc3339();
+        let event_json = serde_json::to_string(event).unwrap_or_default();
+        let prev_hash = self
+            .last_hash
+            .lock()
+            .map_err(|e| format!("Failed to acquire last_hash lock: {}", e))?
+            .clone();
+        let hash = AuditEventEnvelope::compute_hash(sequence, &prev_hash, &event_json, &emitted_at);
+        {
+            let mut lh = self
+                .last_hash
+                .lock()
+                .map_err(|e| format!("Failed to acquire last_hash lock: {}", e))?;
+            *lh = hash.clone();
+        }
+        let envelope = AuditEventEnvelope {
+            sequence,
+            trace_id: None,
+            span_id: None,
+            prev_hash,
+            hash,
+            event: event.clone(),
+            emitted_at,
+        };
+
+        // Fire audit exporters asynchronously (fire-and-forget).
+        let exporters: Vec<Arc<dyn AuditExporter>> = self
+            .audit_exporters
+            .lock()
+            .map_err(|e| format!("Failed to acquire audit_exporters lock: {}", e))?
+            .clone();
+        for exporter in exporters {
+            let envelope_clone = envelope.clone();
+            tokio::spawn(async move {
+                exporter.export(envelope_clone).await;
+            });
+        }
+
         // Notify all subscribers
         let subscribers = self
             .subscribers
@@ -841,6 +1050,16 @@ impl EventBus {
             }
         }
 
+        Ok(())
+    }
+
+    /// Register an [`AuditExporter`] that will be invoked asynchronously for
+    /// every future event dispatched via [`dispatch_generic`].
+    pub fn register_audit_exporter(&self, exporter: Arc<dyn AuditExporter>) -> Result<(), String> {
+        self.audit_exporters
+            .lock()
+            .map_err(|e| format!("Failed to acquire audit_exporters lock: {}", e))?
+            .push(exporter);
         Ok(())
     }
 

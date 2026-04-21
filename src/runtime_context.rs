@@ -17,6 +17,8 @@ const DOMAIN_TAGS_HEADER: &str = "x-roam-domain-tags";
 const TABLE_NAMES_HEADER: &str = "x-roam-table-names";
 const PLAN_ID_HEADER: &str = "x-roam-plan-id";
 const STEP_INDEX_HEADER: &str = "x-roam-step-index";
+const TRACE_ID_HEADER: &str = "x-roam-trace-id";
+const SPAN_ID_HEADER: &str = "x-roam-span-id";
 
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct QueryRuntimeContext {
@@ -37,6 +39,10 @@ pub struct QueryRuntimeContext {
     pub plan_id: Option<String>,
     /// Zero-based index of the step within the plan.
     pub step_index: Option<u32>,
+    /// W3C trace-context trace ID for distributed tracing correlation.
+    pub trace_id: Option<String>,
+    /// W3C trace-context span ID for distributed tracing correlation.
+    pub span_id: Option<String>,
 }
 
 impl QueryRuntimeContext {
@@ -59,6 +65,8 @@ impl QueryRuntimeContext {
             plan_id: get_ascii_metadata(metadata, PLAN_ID_HEADER),
             step_index: get_ascii_metadata(metadata, STEP_INDEX_HEADER)
                 .and_then(|v| v.trim().parse::<u32>().ok()),
+            trace_id: get_ascii_metadata(metadata, TRACE_ID_HEADER),
+            span_id: get_ascii_metadata(metadata, SPAN_ID_HEADER),
         }
     }
 
@@ -78,6 +86,8 @@ impl QueryRuntimeContext {
             || !self.table_names.is_empty()
             || self.plan_id.is_some()
             || self.step_index.is_some()
+            || self.trace_id.is_some()
+            || self.span_id.is_some()
     }
 
     pub fn policy_context(&self) -> Option<PolicyContext> {
@@ -147,6 +157,8 @@ impl QueryRuntimeContext {
         if let Some(idx) = self.step_index {
             metadata.insert("step_index".to_string(), idx.to_string());
         }
+        insert_optional(&mut metadata, "trace_id", self.trace_id.as_ref());
+        insert_optional(&mut metadata, "span_id", self.span_id.as_ref());
 
         metadata
     }

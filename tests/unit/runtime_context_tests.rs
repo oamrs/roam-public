@@ -85,3 +85,53 @@ fn runtime_context_builds_policy_and_event_metadata() {
         Some(&"finance.query".to_string())
     );
 }
+
+#[test]
+fn runtime_context_parses_trace_and_span_id_from_metadata() {
+    let mut request = tonic::Request::new(());
+    request
+        .metadata_mut()
+        .insert("x-roam-trace-id", "trace-abc-123".parse().unwrap());
+    request
+        .metadata_mut()
+        .insert("x-roam-span-id", "span-xyz-456".parse().unwrap());
+
+    let context = QueryRuntimeContext::from_metadata(request.metadata());
+
+    assert_eq!(context.trace_id.as_deref(), Some("trace-abc-123"));
+    assert_eq!(context.span_id.as_deref(), Some("span-xyz-456"));
+}
+
+#[test]
+fn runtime_context_trace_id_absent_when_header_not_set() {
+    let request = tonic::Request::new(());
+    let context = QueryRuntimeContext::from_metadata(request.metadata());
+    assert!(context.trace_id.is_none());
+    assert!(context.span_id.is_none());
+}
+
+#[test]
+fn runtime_context_trace_id_in_event_metadata() {
+    let context = QueryRuntimeContext {
+        trace_id: Some("trace-abc-123".to_string()),
+        span_id: Some("span-xyz-456".to_string()),
+        session_id: Some("sess-99".to_string()),
+        ..Default::default()
+    };
+
+    let metadata = context.event_metadata();
+    assert_eq!(metadata.get("trace_id"), Some(&"trace-abc-123".to_string()));
+    assert_eq!(metadata.get("span_id"), Some(&"span-xyz-456".to_string()));
+}
+
+#[test]
+fn runtime_context_trace_fields_contribute_to_has_values() {
+    let context_with_trace = QueryRuntimeContext {
+        trace_id: Some("trace-abc-123".to_string()),
+        ..Default::default()
+    };
+    assert!(context_with_trace.has_values());
+
+    let empty = QueryRuntimeContext::default();
+    assert!(!empty.has_values());
+}

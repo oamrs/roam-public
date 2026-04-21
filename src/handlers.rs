@@ -7,8 +7,7 @@
 //! [`HandleOutcome::Stop`] when it has an authoritative reason to suppress further
 //! processing (e.g., a rate-limit guard that has already emitted the error response).
 
-use crate::interceptor::{Event, EventHandler, HandleOutcome};
-use async_trait::async_trait;
+use crate::interceptor::{AuditExporter, Event, EventBus, EventHandler, HandleOutcome};
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
 
@@ -31,26 +30,15 @@ impl EventHandler for AuditLogHandler {
     }
 }
 
-// ── AuditExporter ─────────────────────────────────────────────────────────────
+// ── AuditExportHandler ────────────────────────────────────────────────────────
 
-/// Hook for shipping audit records to external systems (SIEM, cloud logging,
-/// centralised audit stores, etc.).
+/// Convenience wrapper that registers an [`AuditExporter`] implementation on
+/// the global [`EventBus`].  Construct with [`AuditExportHandler::new`] then
+/// call [`register`][AuditExportHandler::register] to wire it into the pipeline.
 ///
-/// The local [`AuditLogHandler`] writes to `stderr` — suitable for OSS
-/// single-node deployments.  Enterprise implementations implement this trait
-/// to persist events durably and/or forward them to centralised audit backends.
-///
-/// Failures inside `export` **must not** propagate errors upstream; implementations
-/// should log the failure and continue.
-#[async_trait]
-pub trait AuditExporter: Send + Sync {
-    /// Export a batch of events to the external audit sink.
-    async fn export(&self, events: &[Event]);
-}
-
-/// An [`EventHandler`] that delegates every event to an [`AuditExporter`] via a
-/// fire-and-forget `tokio::spawn`.  Register this handler with the [`EventBus`]
-/// after [`AuditLogHandler`] to add enterprise audit export to the pipeline.
+/// Unlike the old EventHandler-based design, exporters now receive tamper-evident
+/// [`AuditEventEnvelope`]s (with sequence + hash chain) dispatched directly by
+/// the [`EventBus`] — no manual `register_handler` call is needed.
 pub struct AuditExportHandler {
     exporter: Arc<dyn AuditExporter>,
 }
@@ -59,16 +47,10 @@ impl AuditExportHandler {
     pub fn new(exporter: Arc<dyn AuditExporter>) -> Self {
         Self { exporter }
     }
-}
 
-impl EventHandler for AuditExportHandler {
-    fn handle(&self, event: &Event) -> HandleOutcome {
-        let exporter = Arc::clone(&self.exporter);
-        let event = event.clone();
-        tokio::spawn(async move {
-            exporter.export(&[event]).await;
-        });
-        HandleOutcome::Continue
+    /// Register the wrapped exporter on `bus` so it receives every future event.
+    pub fn register(self, bus: &EventBus) -> Result<(), String> {
+        bus.register_audit_exporter(self.exporter)
     }
 }
 

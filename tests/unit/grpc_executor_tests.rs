@@ -1,5 +1,6 @@
-use oam::grpc_executor::{table_to_table_def, GrpcExecutor};
+use oam::grpc_executor::{table_to_table_def, GrpcExecutor, InputScannerHook};
 use oam::mirror::{Column, Index, Table, Trigger, UniqueIndex};
+use oam::runtime_context::QueryRuntimeContext;
 use std::path::PathBuf;
 
 fn test_db_path() -> String {
@@ -197,4 +198,47 @@ fn table_to_table_def_maps_triggers() {
     assert_eq!(def.triggers[0].name, "trg_audit_after_insert");
     assert_eq!(def.triggers[0].timing, "AFTER");
     assert_eq!(def.triggers[0].event, "INSERT");
+}
+
+// ── InputScannerHook ──────────────────────────────────────────────────────────
+
+use std::sync::Arc;
+
+struct AlwaysOkScanner;
+impl InputScannerHook for AlwaysOkScanner {
+    fn scan(&self, _input: &str, _context: &QueryRuntimeContext) -> Result<(), String> {
+        Ok(())
+    }
+}
+
+struct AlwaysBlockScanner;
+impl InputScannerHook for AlwaysBlockScanner {
+    fn scan(&self, _input: &str, _context: &QueryRuntimeContext) -> Result<(), String> {
+        Err("blocked by test scanner".to_string())
+    }
+}
+
+#[test]
+fn grpc_executor_accepts_with_input_scanner_builder() {
+    let db_path = test_db_path();
+    let executor = GrpcExecutor::new(&db_path)
+        .expect("GrpcExecutor::new should succeed")
+        .with_input_scanner(Arc::new(AlwaysOkScanner));
+    drop(executor);
+}
+
+#[test]
+fn input_scanner_hook_ok_implementation_does_not_block() {
+    let scanner = AlwaysOkScanner;
+    let ctx = QueryRuntimeContext::default();
+    assert!(scanner.scan("SELECT 1", &ctx).is_ok());
+}
+
+#[test]
+fn input_scanner_hook_err_implementation_returns_message() {
+    let scanner = AlwaysBlockScanner;
+    let ctx = QueryRuntimeContext::default();
+    let result = scanner.scan("any input", &ctx);
+    assert!(result.is_err());
+    assert_eq!(result.unwrap_err(), "blocked by test scanner");
 }

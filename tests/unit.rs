@@ -34,5 +34,8 @@ mod policy_engine_tests;
 #[path = "unit/runtime_context_tests.rs"]
 mod runtime_context_tests;
 
+#[path = "unit/audit_format_tests.rs"]
+mod audit_format_tests;
+
 #[path = "unit/control_plane_tests.rs"]
 mod control_plane_tests;

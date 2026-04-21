@@ -1,5 +1,6 @@
 pub mod access_policy;
 pub mod approval;
+pub mod audit_format;
 pub mod control_plane;
 pub mod execution_engine;
 pub mod executor;
@@ -25,6 +26,7 @@ pub use access_policy::{
     RowPolicy,
 };
 pub use approval::{ApprovalDecision, ApprovalGate, NoOpApprovalGate, PendingAction};
+pub use audit_format::event_to_ocsf;
 pub use control_plane::{
     DeltaOperation, LlmContextUpdate, NoOpWorkflowOrchestrator, PlanDefinition, PlanRecord,
     PlanStatus, SchemaTableDelta, StepDefinition, StepResult, StepStatus, WorkflowOrchestrator,
@@ -41,17 +43,18 @@ pub use executor::{
 };
 pub use grpc_executor::GrpcExecutor;
 pub use handlers::{
-    AuditExportHandler, AuditExporter, AuditLogHandler, DataAccessEnforcedHandler,
-    DataAccessSnapshot, DefaultHandlerChain, QueryMetricsHandler, QueryMetricsSnapshot,
-    SessionActivityHandler, SharedHandler,
+    AuditExportHandler, AuditLogHandler, DataAccessEnforcedHandler, DataAccessSnapshot,
+    DefaultHandlerChain, QueryMetricsHandler, QueryMetricsSnapshot, SessionActivityHandler,
+    SharedHandler,
 };
 pub use identity::{
     IdentityError, IdentityProvider, OrgSyncConfig, OrgSyncError, OrgSyncProvider, OrgSyncReport,
     UserIdentity,
 };
 pub use interceptor::{
-    get_event_bus, CriticalModelBehavior, CriticalStatusEvent, Event, EventBus, EventHandler,
-    HandleOutcome, HasCriticalStatus, RuntimeAugmentationAuditRecord,
+    get_event_bus, AuditEventEnvelope, AuditExporter, CriticalModelBehavior, CriticalStatusEvent,
+    Event, EventBus, EventHandler, HandleOutcome, HasCriticalStatus,
+    RuntimeAugmentationAuditRecord,
 };
 pub use mapper::{GrpcMapper, LocalMapper, Mapper, TcpMapper};
 pub use memory::{AgentMemoryProvider, MemoryEntry, NoOpMemoryProvider};
