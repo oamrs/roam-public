@@ -1,5 +1,20 @@
 # Changelog
 
+## [0.8.0](https://github.com/oamrs/roam/compare/oam-v0.7.0...oam-v0.8.0) (2026-04-21)
+
+
+### Features
+
+* **audit:** centralized audit logging and AI-SPM integration ([a1af521](https://github.com/oamrs/roam/commit/a1af521fba38f82edbf339fa4ab945793134c830))
+* **audit:** centralized audit logging and AI-SPM integration ([8bb3a01](https://github.com/oamrs/roam/commit/8bb3a0142b389d36476e51ad5b37ab211571ff71)), closes [#11](https://github.com/oamrs/roam/issues/11) [#72](https://github.com/oamrs/roam/issues/72)
+* **control-plane:** add multi-step workflow orchestration ([b4aacb9](https://github.com/oamrs/roam/commit/b4aacb94b284462eb75c12b387293eed9a2d9f91))
+* **control-plane:** add multi-step workflow orchestration ([38548d5](https://github.com/oamrs/roam/commit/38548d55326963c4f57d3568e89477258f408011))
+
+
+### Bug Fixes
+
+* address Copilot review — hash chain race, trace propagation, severity overwrite, transport safety, doc corrections ([14334ac](https://github.com/oamrs/roam/commit/14334ac5357619f04658184ebd9c2239c142fce6))
+
 ## [0.7.0](https://github.com/oamrs/roam/compare/oam-v0.6.0...oam-v0.7.0) (2026-04-20)
 
 
