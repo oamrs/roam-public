@@ -979,40 +979,48 @@ impl EventBus {
         let sequence = self.sequence_counter.fetch_add(1, Ordering::SeqCst) + 1;
         let emitted_at = chrono::Utc::now().to_rfc3339();
         let event_json = serde_json::to_string(event).unwrap_or_default();
-        let prev_hash = self
-            .last_hash
-            .lock()
-            .map_err(|e| format!("Failed to acquire last_hash lock: {}", e))?
-            .clone();
-        let hash = AuditEventEnvelope::compute_hash(sequence, &prev_hash, &event_json, &emitted_at);
-        {
+        // Acquire last_hash once: read prev, compute new hash, write back — all
+        // under the same lock so concurrent dispatch calls cannot interleave and
+        // produce a broken chain (both reading the same prev_hash).
+        let (prev_hash, hash) = {
             let mut lh = self
                 .last_hash
                 .lock()
                 .map_err(|e| format!("Failed to acquire last_hash lock: {}", e))?;
-            *lh = hash.clone();
-        }
+            let prev = lh.clone();
+            let h = AuditEventEnvelope::compute_hash(sequence, &prev, &event_json, &emitted_at);
+            *lh = h.clone();
+            (prev, h)
+        };
+        // Propagate trace/span from the event's context metadata when present.
+        let meta = event.metadata();
+        let trace_id = meta.get("trace_id").cloned();
+        let span_id = meta.get("span_id").cloned();
         let envelope = AuditEventEnvelope {
             sequence,
-            trace_id: None,
-            span_id: None,
+            trace_id,
+            span_id,
             prev_hash,
             hash,
             event: event.clone(),
             emitted_at,
         };
 
-        // Fire audit exporters asynchronously (fire-and-forget).
+        // Fire audit exporters — use the active Tokio runtime when available and
+        // skip gracefully when dispatch_generic is called from a synchronous
+        // (non-Tokio) context (e.g. unit tests).
         let exporters: Vec<Arc<dyn AuditExporter>> = self
             .audit_exporters
             .lock()
             .map_err(|e| format!("Failed to acquire audit_exporters lock: {}", e))?
             .clone();
-        for exporter in exporters {
-            let envelope_clone = envelope.clone();
-            tokio::spawn(async move {
-                exporter.export(envelope_clone).await;
-            });
+        if let Ok(handle) = tokio::runtime::Handle::try_current() {
+            for exporter in exporters {
+                let envelope_clone = envelope.clone();
+                handle.spawn(async move {
+                    exporter.export(envelope_clone).await;
+                });
+            }
         }
 
         // Notify all subscribers

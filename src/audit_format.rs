@@ -219,11 +219,11 @@ fn class_specific_fields(event: &Event) -> Value {
                     "desc": format!("Matched patterns: {}", matched_patterns.join(", ")),
                     "uid": format!("roam-injection-{}", input_hash),
                 },
-                "severity": severity,
                 "disposition": action_taken,
                 "unmapped": {
                     "input_excerpt": input_excerpt,
                     "input_hash": input_hash,
+                    "roam_severity": severity,
                     "context": context_to_map(context),
                 },
             })
