@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.8.1](https://github.com/oamrs/roam/compare/oam-v0.8.0...oam-v0.8.1) (2026-04-22)
+
+
+### Bug Fixes
+
+* **release:** propagate oam-proto/oam-schema version bumps into roam ([c936ccb](https://github.com/oamrs/roam/commit/c936ccb96bd705886e54844104655d51928f8762))
+* **release:** propagate oam-proto/oam-schema version bumps into roam-public ([f57c91e](https://github.com/oamrs/roam/commit/f57c91e1cd1ef0321117127ce8b10404c40f23b3))
+
 ## [0.8.0](https://github.com/oamrs/roam/compare/oam-v0.7.0...oam-v0.8.0) (2026-04-21)
 
 
